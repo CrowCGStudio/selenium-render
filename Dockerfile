@@ -8,7 +8,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     chromium chromium-driver \
     libnss3 libgdk-pixbuf-2.0-0 libgtk-3-0 libatk-bridge2.0-0 \
     libdrm2 libxkbcommon0 libgbm1 libasound2 fonts-liberation \
-    xdg-user-dirs libgpg-error-l10n libgtk-3-bin krb5-locales libkmod2 \
     && rm -rf /var/lib/apt/lists/*
 
 # Variabili utili (usate in app.py)
