@@ -6,7 +6,7 @@ ENV DEBIAN_FRONTEND=noninteractive
 # Aggiorno e installo Chromium + Chromedriver + librerie necessarie
 RUN apt-get update && apt-get install -y --no-install-recommends \
     chromium chromium-driver \
-    libnss3 libgdk-pixbuf2.0-0 libgtk-3-0 libatk-bridge2.0-0 \
+    libnss3 libgdk-pixbuf-2.0-0 libgtk-3-0 libatk-bridge2.0-0 \
     libdrm2 libxkbcommon0 libgbm1 libasound2 fonts-liberation \
     && rm -rf /var/lib/apt/lists/*
 
