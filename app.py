@@ -30,7 +30,7 @@ def build_driver():
     service = Service(chromedriver_path)
     driver = webdriver.Chrome(service=service, options=options)
 
-    # Abilito i download in headless verso DOWNLOAD_DIR (CDP)
+    # Abilito i download in headless verso DOWNLOAD_DIR
     try:
         driver.execute_cdp_cmd(
             "Page.setDownloadBehavior",
@@ -44,6 +44,7 @@ def build_driver():
 def scrape_and_download(url: str):
     driver = build_driver()
     results = []
+
     try:
         print("[INFO] Navigo:", url)
         driver.get(url)
@@ -60,24 +61,22 @@ def scrape_and_download(url: str):
                     link = item.find_element(By.CSS_SELECTOR, 'a[data-qa="attachment"]')
                     file_label = (link.text or "").strip()
 
-                    # Stato iniziale dei file presenti
+                    # Stato iniziale dei file
                     before = set(os.listdir(DOWNLOAD_DIR))
 
-                    # Scroll + click
+                    # Scroll e click
                     driver.execute_script("arguments[0].scrollIntoView(true);", link)
-                    time.sleep(0.3)
-                    link.click()
+                    time.sleep(0.5)
+                    driver.execute_script("arguments[0].click();", link)
 
-                    # Attendo che compaia un nuovo file (max 30s)
+                    # Attendo file nuovo (max 30s)
                     new_file = None
                     for _ in range(60):  # 60 * 0.5s = 30s
                         time.sleep(0.5)
                         after = set(os.listdir(DOWNLOAD_DIR))
                         created = list(after - before)
-                        # Escludo eventuali .crdownload ancora in corso
                         created = [f for f in created if not f.endswith(".crdownload") and not f.endswith(".tmp")]
                         if created:
-                            # Se arrivano più file, li elenco tutti (di solito è 1)
                             new_file = created[0]
                             break
 
@@ -91,7 +90,7 @@ def scrape_and_download(url: str):
                         results.append({
                             "index": index,
                             "label": file_label,
-                            "warning": "Nessun nuovo file rilevato dopo il click (potrebbe essere redirect protetto o tempo non sufficiente)."
+                            "warning": "Nessun file nuovo rilevato dopo il click."
                         })
 
                 except Exception as e:
@@ -111,7 +110,6 @@ def health():
 
 @app.route("/files/<path:filename>", methods=["GET"])
 def serve_file(filename):
-    # Rende scaricabile il file dal server (così Zapier può prenderlo)
     return send_from_directory(DOWNLOAD_DIR, filename, as_attachment=True)
 
 @app.route("/scrape", methods=["POST"])
@@ -123,7 +121,7 @@ def scrape():
 
     results = scrape_and_download(url)
 
-    # Costruisco URL pubblici dei file per Zapier
+    # Costruisco i link pubblici per i file
     base = request.host_url.rstrip("/")
     enriched = []
     for r in results:
