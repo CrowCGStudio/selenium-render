@@ -57,6 +57,9 @@ def scrape_page(url: str):
                 try:
                     link = item.find_element(By.CSS_SELECTOR, 'a[data-qa="attachment"]')
                     file_label = (link.text or "").strip()
+                    if "." in file_label:
+                        file_label = file_label.rsplit(".", 1)[0]  # prendi tutto prima dell’ultimo punto
+
                     href = link.get_attribute("href")
 
                     # Stato iniziale cartella
