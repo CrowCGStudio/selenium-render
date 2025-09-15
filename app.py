@@ -1,6 +1,6 @@
 import os
 import time
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, send_from_directory
 
 from selenium import webdriver
 from selenium.webdriver.common.by import By
@@ -8,6 +8,10 @@ from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
+
+# Cartella per i download
+DOWNLOAD_DIR = os.environ.get("DOWNLOAD_DIR", "/app/downloads")
+os.makedirs(DOWNLOAD_DIR, exist_ok=True)
 
 app = Flask(__name__)
 
@@ -25,6 +29,13 @@ def build_driver():
 
     service = Service(chromedriver_path)
     driver = webdriver.Chrome(service=service, options=options)
+
+    # Dico a Chrome headless dove salvare i file
+    driver.execute_cdp_cmd(
+        "Page.setDownloadBehavior",
+        {"behavior": "allow", "downloadPath": DOWNLOAD_DIR}
+    )
+
     return driver
 
 def scrape_page(url: str):
@@ -35,7 +46,6 @@ def scrape_page(url: str):
         print("[INFO] Navigo:", url)
         driver.get(url)
 
-        # Attesa della lista allegati
         wait = WebDriverWait(driver, 20)
         wait.until(EC.presence_of_all_elements_located((By.CSS_SELECTOR, ".list-detail-view.sortable")))
         list_items = driver.find_elements(By.CSS_SELECTOR, ".list-detail-view.sortable")
@@ -47,31 +57,38 @@ def scrape_page(url: str):
                 try:
                     link = item.find_element(By.CSS_SELECTOR, 'a[data-qa="attachment"]')
                     file_label = (link.text or "").strip()
+                    href = link.get_attribute("href")
 
-                    # Scroll al link
+                    # Stato iniziale cartella
+                    before = set(os.listdir(DOWNLOAD_DIR))
+
+                    # Scroll e click
                     driver.execute_script("arguments[0].scrollIntoView(true);", link)
                     time.sleep(0.5)
-
-                    # Attendi che sia cliccabile
-                    wait.until(EC.element_to_be_clickable((By.CSS_SELECTOR, 'a[data-qa="attachment"]')))
-
-                    # Click via JavaScript (più robusto in headless)
                     driver.execute_script("arguments[0].click();", link)
 
-                    # Pausa per non sovrapporre i click
-                    time.sleep(2)
+                    # Attendo fino a 10s per nuovo file
+                    new_file = None
+                    for _ in range(20):
+                        time.sleep(0.5)
+                        after = set(os.listdir(DOWNLOAD_DIR))
+                        created = list(after - before)
+                        created = [f for f in created if not f.endswith(".crdownload") and not f.endswith(".tmp")]
+                        if created:
+                            new_file = created[0]
+                            break
 
-                    results.append({
+                    result = {
                         "index": index,
                         "label": file_label,
-                        "status": "cliccato"
-                    })
+                        "href": href
+                    }
+                    if new_file:
+                        result["saved_file"] = new_file
+                    results.append(result)
 
                 except Exception as e:
-                    results.append({
-                        "index": index,
-                        "error": str(e)
-                    })
+                    results.append({"index": index, "error": str(e)})
 
     except Exception as e:
         results.append({"error": str(e)})
@@ -85,6 +102,10 @@ def scrape_page(url: str):
 def health():
     return "ok", 200
 
+@app.route("/files/<path:filename>", methods=["GET"])
+def serve_file(filename):
+    return send_from_directory(DOWNLOAD_DIR, filename, as_attachment=True)
+
 @app.route("/scrape", methods=["POST"])
 def scrape():
     data = request.get_json(silent=True) or {}
@@ -93,6 +114,13 @@ def scrape():
         return jsonify({"error": "URL mancante"}), 400
 
     results = scrape_page(url)
+
+    # arricchisco con i link pubblici
+    base = request.host_url.rstrip("/")
+    for r in results:
+        if r.get("saved_file"):
+            r["file_url"] = f"{base}/files/{r['saved_file']}"
+
     return jsonify({"results": results}), 200
 
 if __name__ == "__main__":
