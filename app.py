@@ -1,5 +1,7 @@
 import os
 import time
+import threading
+import requests
 from flask import Flask, request, jsonify, send_from_directory
 
 from selenium import webdriver
@@ -39,6 +41,7 @@ def build_driver():
     return driver
 
 def scrape_page(url: str):
+    """Funziona come prima: scarica gli allegati da un singolo annuncio."""
     driver = build_driver()
     results = []
 
@@ -101,6 +104,26 @@ def scrape_page(url: str):
 
     return results
 
+def process_async(urls, webhook_url, base_url):
+    """Processa gli URL uno alla volta e invia i risultati a Zapier via webhook."""
+    for u in urls:
+        page_results = scrape_page(u)
+        # arricchisco con i link pubblici
+        for r in page_results:
+            if r.get("saved_file"):
+                r["file_url"] = f"{base_url}/files/{r['saved_file']}"
+
+        payload = {
+            "url": u,
+            "results": page_results
+        }
+
+        try:
+            print(f"[INFO] Invio risultati a Zapier per {u}")
+            requests.post(webhook_url, json=payload, timeout=10)
+        except Exception as e:
+            print(f"[ERRORE] Invio webhook fallito per {u}: {e}")
+
 @app.route("/health", methods=["GET"])
 def health():
     return "ok", 200
@@ -125,6 +148,27 @@ def scrape():
             r["file_url"] = f"{base}/files/{r['saved_file']}"
 
     return jsonify({"results": results}), 200
+
+@app.route("/scrape_async", methods=["POST"])
+def scrape_async():
+    """
+    Riceve una stringa di URL separati da virgole e un webhook URL.
+    Avvia il lavoro in background e risponde subito con 'in lavorazione'.
+    """
+    data = request.get_json(silent=True) or {}
+    urls_str = data.get("urls")
+    webhook_url = data.get("webhook_url")
+
+    if not urls_str or not webhook_url:
+        return jsonify({"error": "urls e webhook_url sono richiesti"}), 400
+
+    urls = [u.strip() for u in urls_str.split(",") if u.strip()]
+    base_url = request.host_url.rstrip("/")
+
+    # Avvio thread in background
+    threading.Thread(target=process_async, args=(urls, webhook_url, base_url), daemon=True).start()
+
+    return jsonify({"status": "in lavorazione", "urls": urls}), 202
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
