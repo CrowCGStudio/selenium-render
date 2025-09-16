@@ -62,7 +62,7 @@ def scrape_page(url: str):
                     link = item.find_element(By.CSS_SELECTOR, 'a[data-qa="attachment"]')
                     file_label = (link.text or "").strip()
                     if "." in file_label:
-                        file_label = file_label.rsplit(".", 1)[0]  # prendi tutto prima dell’ultimo punto
+                        file_label = file_label.rsplit(".", 1)[0]
 
                     href = link.get_attribute("href")
 
@@ -109,7 +109,6 @@ def process_async(urls, webhook_url, base_url):
     """Processa gli URL uno alla volta e invia i risultati a Zapier via webhook."""
     for u in urls:
         page_results = scrape_page(u)
-        # arricchisco con i link pubblici
         for r in page_results:
             if r.get("saved_file"):
                 encoded_name = quote(r["saved_file"])
@@ -121,8 +120,11 @@ def process_async(urls, webhook_url, base_url):
         }
 
         try:
-            print(f"[INFO] Invio risultati a Zapier per {u}")
-            requests.post(webhook_url, json=payload, timeout=10)
+            if webhook_url:
+                print(f"[INFO] Invio risultati a Zapier per {u}")
+                requests.post(webhook_url, json=payload, timeout=10)
+            else:
+                print(f"[INFO] Risultati per {u}: {payload}")
         except Exception as e:
             print(f"[ERRORE] Invio webhook fallito per {u}: {e}")
 
@@ -143,7 +145,6 @@ def scrape():
 
     results = scrape_page(url)
 
-    # arricchisco con i link pubblici
     base = request.host_url.rstrip("/")
     for r in results:
         if r.get("saved_file"):
@@ -155,20 +156,29 @@ def scrape():
 @app.route("/scrape_async", methods=["POST"])
 def scrape_async():
     """
-    Riceve una stringa di URL separati da virgole e un webhook URL.
-    Avvia il lavoro in background e risponde subito con 'in lavorazione'.
+    Riceve:
+    - formato classico: {"urls": "https://a,https://b", "webhook_url": "..."}
+    - formato Browse AI: {"task": {"capturedLists": {"Annunci START": [ {"link ai documenti dell'annuncio": "..."} ]}}}
     """
     data = request.get_json(silent=True) or {}
-    urls_str = data.get("urls")
     webhook_url = data.get("webhook_url")
 
-    if not urls_str or not webhook_url:
-        return jsonify({"error": "urls e webhook_url sono richiesti"}), 400
+    urls = []
 
-    urls = [u.strip() for u in urls_str.split(",") if u.strip()]
+    # Caso classico: stringa di URL
+    urls_str = data.get("urls")
+    if urls_str:
+        urls = [u.strip() for u in urls_str.split(",") if u.strip()]
+
+    # Caso Browse AI: estraggo dalla lista
+    if not urls and "task" in data:
+        annunci = data.get("task", {}).get("capturedLists", {}).get("Annunci START", [])
+        urls = [a["link ai documenti dell'annuncio"] for a in annunci if "link ai documenti dell'annuncio" in a]
+
+    if not urls:
+        return jsonify({"error": "Nessun URL trovato"}), 400
+
     base_url = request.host_url.rstrip("/")
-
-    # Avvio thread in background
     threading.Thread(target=process_async, args=(urls, webhook_url, base_url), daemon=True).start()
 
     return jsonify({"status": "in lavorazione", "urls": urls}), 202
