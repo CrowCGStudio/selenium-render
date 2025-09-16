@@ -17,11 +17,11 @@ os.makedirs(DOWNLOAD_DIR, exist_ok=True)
 
 # Configurazione logging
 logging.basicConfig(
-    level=logging.INFO,  # livello minimo (puoi usare DEBUG per più dettagli)
+    level=logging.INFO,  # DEBUG se vuoi più dettagli
     format="%(asctime)s [%(levelname)s] %(message)s",
     handlers=[
-        logging.StreamHandler(),  # stampa su console
-        logging.FileHandler("/app/app.log", mode="a")  # salva su file
+        logging.StreamHandler(),
+        logging.FileHandler("/app/app.log", mode="a")
     ]
 )
 logger = logging.getLogger(__name__)
@@ -47,13 +47,11 @@ def build_driver():
         "Page.setDownloadBehavior",
         {"behavior": "allow", "downloadPath": DOWNLOAD_DIR}
     )
-
     return driver
 
 def scrape_page(url: str):
     driver = build_driver()
     results = []
-
     try:
         logger.info(f"Navigo su: {url}")
         driver.get(url)
@@ -73,7 +71,6 @@ def scrape_page(url: str):
                     file_label = (link.text or "").strip()
                     if "." in file_label:
                         file_label = file_label.rsplit(".", 1)[0]
-
                     href = link.get_attribute("href")
 
                     before = set(os.listdir(DOWNLOAD_DIR))
@@ -97,21 +94,17 @@ def scrape_page(url: str):
                         logger.info(f"Scaricato file: {new_file}")
                     else:
                         logger.warning(f"Nessun file scaricato per {file_label}")
-
                     results.append(result)
 
                 except Exception as e:
-                    logger.error(f"Errore elaborando allegato {index}: {e}", exc_info=True)
+                    logger.error(f"Errore allegato {index}: {e}", exc_info=True)
                     results.append({"index": index, "error": str(e)})
-
     except Exception as e:
-        logger.error(f"Errore globale durante scraping: {e}", exc_info=True)
+        logger.error(f"Errore globale scraping: {e}", exc_info=True)
         results.append({"error": str(e)})
-
     finally:
         driver.quit()
         logger.info("Driver chiuso")
-
     return results
 
 @app.route("/health", methods=["GET"])
@@ -130,7 +123,6 @@ def scrape():
         return jsonify({"error": "URL mancante"}), 400
 
     results = scrape_page(url)
-
     base = request.host_url.rstrip("/")
     for r in results:
         if r.get("saved_file"):
@@ -140,25 +132,50 @@ def scrape():
 
 @app.route("/batch_scrape", methods=["POST"])
 def batch_scrape():
+    """
+    Riceve direttamente il payload di BrowseAI.
+    Estrae la lista 'Annunci START' da capturedLists.
+    Per ogni annuncio:
+      - esegue scraping con Selenium
+      - aggiunge i metadati
+      - invia un JSON a Zapier via webhook
+    """
     data = request.get_json(silent=True) or {}
-    raw_urls = data.get("urls", "")
     webhook = data.get("webhook")
 
-    if not raw_urls or not webhook:
-        return jsonify({"error": "Parametri mancanti (urls, webhook)"}), 400
+    if not webhook:
+        return jsonify({"error": "Parametro 'webhook' mancante"}), 400
 
-    urls = [u.strip() for u in raw_urls.split(",") if u.strip()]
+    announcements = data.get("task", {}).get("capturedLists", {}).get("Annunci START", [])
+    if not announcements:
+        logger.warning("Nessun annuncio trovato nel payload")
+        return jsonify({"status": "no_announcements"}), 200
+
     base = request.host_url.rstrip("/")
 
-    for url in urls:
-        logger.info(f"[BATCH] Processing URL: {url}")
+    for annuncio in announcements:
+        url = annuncio.get("link ai documenti dell'annuncio")
+        if not url:
+            logger.warning("Annuncio senza link ai documenti, skip")
+            continue
+
+        logger.info(f"[BATCH] Processing annuncio ID {annuncio.get('ID annuncio e anno')} - URL: {url}")
         results = scrape_page(url)
 
         for r in results:
             if r.get("saved_file"):
                 r["file_url"] = f"{base}/files/{r['saved_file']}"
 
-        payload = {"url": url, "results": results}
+        payload = {
+            "annuncio": {
+                "id": annuncio.get("ID annuncio e anno"),
+                "titolo": annuncio.get("titolo annuncio"),
+                "ente": annuncio.get("ente promotore"),
+                "stato": annuncio.get("stato gara"),
+                "url": url
+            },
+            "results": results
+        }
 
         try:
             resp = requests.post(webhook, json=payload, timeout=30)
@@ -166,8 +183,8 @@ def batch_scrape():
         except Exception as e:
             logger.error(f"[BATCH] Errore invio webhook: {e}", exc_info=True)
 
-    logger.info(f"[BATCH] Completato, processati {len(urls)} URL")
-    return jsonify({"status": "batch completato", "processed": len(urls)}), 200
+    logger.info(f"[BATCH] Completato, processati {len(announcements)} annunci")
+    return jsonify({"status": "batch completato", "processed": len(announcements)}), 200
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
