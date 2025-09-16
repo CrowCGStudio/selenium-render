@@ -16,6 +16,9 @@ from selenium.webdriver.support import expected_conditions as EC
 DOWNLOAD_DIR = os.environ.get("DOWNLOAD_DIR", "/app/downloads")
 os.makedirs(DOWNLOAD_DIR, exist_ok=True)
 
+# Webhook statico Zapier (destinazione finale)
+WEBHOOK_DEST = "https://hooks.zapier.com/hooks/catch/24277770/umrp8cs/"
+
 app = Flask(__name__)
 
 def build_driver():
@@ -42,12 +45,12 @@ def build_driver():
     return driver
 
 def scrape_page(url: str):
-    """Funziona come prima: scarica gli allegati da un singolo annuncio."""
+    """Scarica gli allegati da un singolo annuncio."""
     driver = build_driver()
     results = []
 
     try:
-        print("[INFO] Navigo:", url)
+        print(f"[INFO] Navigo: {url}")
         driver.get(url)
 
         wait = WebDriverWait(driver, 20)
@@ -55,18 +58,20 @@ def scrape_page(url: str):
         list_items = driver.find_elements(By.CSS_SELECTOR, ".list-detail-view.sortable")
 
         if not list_items:
+            print("[INFO] Nessun allegato trovato su questa pagina.")
             results.append({"message": "Nessun allegato trovato."})
         else:
+            print(f"[INFO] Trovati {len(list_items)} possibili allegati.")
             for index, item in enumerate(list_items, start=1):
                 try:
                     link = item.find_element(By.CSS_SELECTOR, 'a[data-qa="attachment"]')
                     file_label = (link.text or "").strip()
                     if "." in file_label:
-                        file_label = file_label.rsplit(".", 1)[0]  # prendi tutto prima dell’ultimo punto
+                        file_label = file_label.rsplit(".", 1)[0]
 
                     href = link.get_attribute("href")
+                    print(f"[INFO] ({index}) Allegato trovato: {file_label} ({href})")
 
-                    # Stato iniziale cartella
                     before = set(os.listdir(DOWNLOAD_DIR))
 
                     # Scroll e click
@@ -83,6 +88,7 @@ def scrape_page(url: str):
                         created = [f for f in created if not f.endswith(".crdownload") and not f.endswith(".tmp")]
                         if created:
                             new_file = created[0]
+                            print(f"[INFO] → File scaricato: {new_file}")
                             break
 
                     result = {
@@ -95,9 +101,11 @@ def scrape_page(url: str):
                     results.append(result)
 
                 except Exception as e:
+                    print(f"[ERRORE] Problema con allegato {index}: {e}")
                     results.append({"index": index, "error": str(e)})
 
     except Exception as e:
+        print(f"[ERRORE] Problema generale con la pagina {url}: {e}")
         results.append({"error": str(e)})
 
     finally:
@@ -109,6 +117,7 @@ def process_async(urls, webhook_url, base_url):
     """Processa gli URL uno alla volta e invia i risultati a Zapier via webhook."""
     for u in urls:
         page_results = scrape_page(u)
+
         # arricchisco con i link pubblici
         for r in page_results:
             if r.get("saved_file"):
@@ -168,8 +177,30 @@ def scrape_async():
     urls = [u.strip() for u in urls_str.split(",") if u.strip()]
     base_url = request.host_url.rstrip("/")
 
-    # Avvio thread in background
     threading.Thread(target=process_async, args=(urls, webhook_url, base_url), daemon=True).start()
+
+    return jsonify({"status": "in lavorazione", "urls": urls}), 202
+
+@app.route("/ricevi_annunci", methods=["POST"])
+def ricevi_annunci():
+    """
+    Riceve il payload completo da Browse AI,
+    estrae la lista di URL e avvia il processamento con webhook statico.
+    """
+    data = request.get_json(silent=True) or {}
+    print("[INFO] Payload ricevuto:", data)
+
+    # estraggo gli URL dagli annunci
+    annunci = data.get("task", {}).get("capturedLists", {}).get("Annunci START", [])
+    urls = [a.get("link ai documenti dell'annuncio") for a in annunci if a.get("link ai documenti dell'annuncio")]
+
+    if not urls:
+        return jsonify({"error": "Nessun URL trovato nel payload"}), 400
+
+    base_url = request.host_url.rstrip("/")
+
+    print(f"[INFO] Estratti {len(urls)} URL da processare.")
+    threading.Thread(target=process_async, args=(urls, WEBHOOK_DEST, base_url), daemon=True).start()
 
     return jsonify({"status": "in lavorazione", "urls": urls}), 202
 
