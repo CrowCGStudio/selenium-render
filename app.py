@@ -113,10 +113,14 @@ def scrape_page(url: str):
 
     return results
 
-def process_async(urls, webhook_url, base_url):
-    """Processa gli URL uno alla volta e invia i risultati a Zapier via webhook."""
-    for u in urls:
-        page_results = scrape_page(u)
+def process_async(annunci, webhook_url, base_url):
+    """Processa gli annunci uno alla volta e invia i risultati a Zapier via webhook."""
+    for annuncio in annunci:
+        url = annuncio.get("link ai documenti dell'annuncio")
+        if not url:
+            continue
+
+        page_results = scrape_page(url)
 
         # arricchisco con i link pubblici
         for r in page_results:
@@ -125,15 +129,22 @@ def process_async(urls, webhook_url, base_url):
                 r["file_url"] = f"{base_url}/files/{encoded_name}"
 
         payload = {
-            "url": u,
+            "url": url,
+            "announcement": {
+                "Position": annuncio.get("Position"),
+                "ente promotore": annuncio.get("ente promotore"),
+                "ID annuncio e anno": annuncio.get("ID annuncio e anno"),
+                "titolo annuncio": annuncio.get("titolo annuncio"),
+                "stato gara": annuncio.get("stato gara"),
+            },
             "results": page_results
         }
 
         try:
-            print(f"[INFO] Invio risultati a Zapier per {u}")
+            print(f"[INFO] Invio risultati a Zapier per {url}")
             requests.post(webhook_url, json=payload, timeout=10)
         except Exception as e:
-            print(f"[ERRORE] Invio webhook fallito per {u}: {e}")
+            print(f"[ERRORE] Invio webhook fallito per {url}: {e}")
 
 @app.route("/health", methods=["GET"])
 def health():
@@ -177,7 +188,10 @@ def scrape_async():
     urls = [u.strip() for u in urls_str.split(",") if u.strip()]
     base_url = request.host_url.rstrip("/")
 
-    threading.Thread(target=process_async, args=(urls, webhook_url, base_url), daemon=True).start()
+    # creo annunci fittizi con solo URL (per compatibilità)
+    annunci = [{"link ai documenti dell'annuncio": u} for u in urls]
+
+    threading.Thread(target=process_async, args=(annunci, webhook_url, base_url), daemon=True).start()
 
     return jsonify({"status": "in lavorazione", "urls": urls}), 202
 
@@ -185,23 +199,21 @@ def scrape_async():
 def ricevi_annunci():
     """
     Riceve il payload completo da Browse AI,
-    estrae la lista di URL e avvia il processamento con webhook statico.
+    estrae la lista degli annunci e avvia il processamento con webhook statico.
     """
     data = request.get_json(silent=True) or {}
     print("[INFO] Payload ricevuto:", data)
 
-    # estraggo gli URL dagli annunci
     annunci = data.get("task", {}).get("capturedLists", {}).get("Annunci START", [])
-    urls = [a.get("link ai documenti dell'annuncio") for a in annunci if a.get("link ai documenti dell'annuncio")]
-
-    if not urls:
-        return jsonify({"error": "Nessun URL trovato nel payload"}), 400
+    if not annunci:
+        return jsonify({"error": "Nessun annuncio trovato nel payload"}), 400
 
     base_url = request.host_url.rstrip("/")
 
-    print(f"[INFO] Estratti {len(urls)} URL da processare.")
-    threading.Thread(target=process_async, args=(urls, WEBHOOK_DEST, base_url), daemon=True).start()
+    print(f"[INFO] Estratti {len(annunci)} annunci da processare.")
+    threading.Thread(target=process_async, args=(annunci, WEBHOOK_DEST, base_url), daemon=True).start()
 
+    urls = [a.get("link ai documenti dell'annuncio") for a in annunci if a.get("link ai documenti dell'annuncio")]
     return jsonify({"status": "in lavorazione", "urls": urls}), 202
 
 if __name__ == "__main__":
