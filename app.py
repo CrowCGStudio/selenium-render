@@ -2,6 +2,7 @@ import os
 import time
 import threading
 import requests
+from urllib.parse import quote
 from flask import Flask, request, jsonify, send_from_directory
 
 from selenium import webdriver
@@ -111,7 +112,8 @@ def process_async(urls, webhook_url, base_url):
         # arricchisco con i link pubblici
         for r in page_results:
             if r.get("saved_file"):
-                r["file_url"] = f"{base_url}/files/{r['saved_file']}"
+                encoded_name = quote(r["saved_file"])
+                r["file_url"] = f"{base_url}/files/{encoded_name}"
 
         payload = {
             "url": u,
@@ -145,7 +147,8 @@ def scrape():
     base = request.host_url.rstrip("/")
     for r in results:
         if r.get("saved_file"):
-            r["file_url"] = f"{base}/files/{r['saved_file']}"
+            encoded_name = quote(r["saved_file"])
+            r["file_url"] = f"{base}/files/{encoded_name}"
 
     return jsonify({"results": results}), 200
 
