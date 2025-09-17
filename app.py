@@ -59,7 +59,6 @@ def scrape_page(url: str):
 
         if not list_items:
             print("[INFO] Nessun allegato trovato su questa pagina.")
-            results.append({"message": "Nessun allegato trovato."})
         else:
             print(f"[INFO] Trovati {len(list_items)} possibili allegati.")
             for index, item in enumerate(list_items, start=1):
@@ -100,13 +99,12 @@ def scrape_page(url: str):
                         result["saved_file"] = new_file
                     results.append(result)
 
-                except Exception as e:
-                    print(f"[ERRORE] Problema con allegato {index}: {e}")
-                    results.append({"index": index, "error": str(e)})
+                except Exception:
+                    # Silenzio l'errore se l'item non contiene un allegato
+                    continue
 
     except Exception as e:
         print(f"[ERRORE] Problema generale con la pagina {url}: {e}")
-        results.append({"error": str(e)})
 
     finally:
         driver.quit()
@@ -128,6 +126,13 @@ def process_async(annunci, webhook_url, base_url):
                 encoded_name = quote(r["saved_file"])
                 r["file_url"] = f"{base_url}/files/{encoded_name}"
 
+        # booleano per indicare se ci sono allegati
+        has_attachments = any(r.get("saved_file") for r in page_results)
+
+        if not has_attachments:
+            print(f"[INFO] Nessun allegato scaricato per {url}")
+            page_results = []
+
         payload = {
             "url": url,
             "announcement": {
@@ -137,6 +142,7 @@ def process_async(annunci, webhook_url, base_url):
                 "titolo annuncio": annuncio.get("titolo annuncio"),
                 "stato gara": annuncio.get("stato gara"),
             },
+            "has_attachments": has_attachments,
             "results": page_results
         }
 
