@@ -16,9 +16,6 @@ from selenium.webdriver.support import expected_conditions as EC
 DOWNLOAD_DIR = os.environ.get("DOWNLOAD_DIR", "/app/downloads")
 os.makedirs(DOWNLOAD_DIR, exist_ok=True)
 
-# Webhook statico Zapier (destinazione finale)
-WEBHOOK_DEST = "https://hooks.zapier.com/hooks/catch/24277770/umrp8cs/"
-
 app = Flask(__name__)
 
 def build_driver():
@@ -50,7 +47,7 @@ def scrape_page(url: str):
     results = []
 
     try:
-        print(f"[INFO] Navigo: {url}")
+        print("[INFO] Navigo:", url)
         driver.get(url)
 
         wait = WebDriverWait(driver, 20)
@@ -58,20 +55,24 @@ def scrape_page(url: str):
         list_items = driver.find_elements(By.CSS_SELECTOR, ".list-detail-view.sortable")
 
         if not list_items:
-            print("[INFO] Nessun allegato trovato su questa pagina.")
             results.append({"message": "Nessun allegato trovato."})
         else:
             print(f"[INFO] Trovati {len(list_items)} possibili allegati.")
             for index, item in enumerate(list_items, start=1):
                 try:
-                    link = item.find_element(By.CSS_SELECTOR, 'a[data-qa="attachment"]')
+                    links = item.find_elements(By.CSS_SELECTOR, 'a[data-qa="attachment"]')
+                    if not links:
+                        print(f"[WARN] Nessun link di allegato in item {index}")
+                        continue
+
+                    link = links[0]
                     file_label = (link.text or "").strip()
                     if "." in file_label:
                         file_label = file_label.rsplit(".", 1)[0]
 
                     href = link.get_attribute("href")
-                    print(f"[INFO] ({index}) Allegato trovato: {file_label} ({href})")
 
+                    # Stato iniziale cartella
                     before = set(os.listdir(DOWNLOAD_DIR))
 
                     # Scroll e click
@@ -88,7 +89,6 @@ def scrape_page(url: str):
                         created = [f for f in created if not f.endswith(".crdownload") and not f.endswith(".tmp")]
                         if created:
                             new_file = created[0]
-                            print(f"[INFO] → File scaricato: {new_file}")
                             break
 
                     result = {
@@ -98,14 +98,13 @@ def scrape_page(url: str):
                     }
                     if new_file:
                         result["saved_file"] = new_file
+                        print(f"[INFO] → File scaricato: {new_file}")
                     results.append(result)
 
                 except Exception as e:
-                    print(f"[ERRORE] Problema con allegato {index}: {e}")
                     results.append({"index": index, "error": str(e)})
 
     except Exception as e:
-        print(f"[ERRORE] Problema generale con la pagina {url}: {e}")
         results.append({"error": str(e)})
 
     finally:
@@ -113,109 +112,31 @@ def scrape_page(url: str):
 
     return results
 
-def process_async(annunci, webhook_url, base_url):
-    """Processa gli annunci uno alla volta e invia i risultati a Zapier via webhook."""
-    for annuncio in annunci:
-        url = annuncio.get("link ai documenti dell'annuncio")
-        if not url:
-            continue
-
-        page_results = scrape_page(url)
+def process_async(urls, webhook_url, base_url):
+    """Processa gli URL uno alla volta e invia i risultati a Zapier via webhook."""
+    for u in urls:
+        page_results = scrape_page(u)
 
         # arricchisco con i link pubblici
+        downloaded_files = []
         for r in page_results:
             if r.get("saved_file"):
                 encoded_name = quote(r["saved_file"])
-                r["file_url"] = f"{base_url}/files/{encoded_name}"
+                file_url = f"{base_url}/files/{encoded_name}"
+                r["file_url"] = file_url
+                downloaded_files.append(file_url)
+
+        # 🔎 DEBUG: riepilogo file scaricati
+        if downloaded_files:
+            print(f"[DEBUG] File scaricati per {u}:")
+            for f in downloaded_files:
+                print("   →", f)
 
         payload = {
-            "url": url,
-            "announcement": {
-                "Position": annuncio.get("Position"),
-                "ente promotore": annuncio.get("ente promotore"),
-                "ID annuncio e anno": annuncio.get("ID annuncio e anno"),
-                "titolo annuncio": annuncio.get("titolo annuncio"),
-                "stato gara": annuncio.get("stato gara"),
-            },
-            "results": page_results
+            "url": u,
+            "results": page_results,
+            "downloaded_files": downloaded_files
         }
 
         try:
-            print(f"[INFO] Invio risultati a Zapier per {url}")
-            requests.post(webhook_url, json=payload, timeout=10)
-        except Exception as e:
-            print(f"[ERRORE] Invio webhook fallito per {url}: {e}")
-
-@app.route("/health", methods=["GET"])
-def health():
-    return "ok", 200
-
-@app.route("/files/<path:filename>", methods=["GET"])
-def serve_file(filename):
-    return send_from_directory(DOWNLOAD_DIR, filename, as_attachment=True)
-
-@app.route("/scrape", methods=["POST"])
-def scrape():
-    data = request.get_json(silent=True) or {}
-    url = data.get("url")
-    if not url:
-        return jsonify({"error": "URL mancante"}), 400
-
-    results = scrape_page(url)
-
-    # arricchisco con i link pubblici
-    base = request.host_url.rstrip("/")
-    for r in results:
-        if r.get("saved_file"):
-            encoded_name = quote(r["saved_file"])
-            r["file_url"] = f"{base}/files/{encoded_name}"
-
-    return jsonify({"results": results}), 200
-
-@app.route("/scrape_async", methods=["POST"])
-def scrape_async():
-    """
-    Riceve una stringa di URL separati da virgole e un webhook URL.
-    Avvia il lavoro in background e risponde subito con 'in lavorazione'.
-    """
-    data = request.get_json(silent=True) or {}
-    urls_str = data.get("urls")
-    webhook_url = data.get("webhook_url")
-
-    if not urls_str or not webhook_url:
-        return jsonify({"error": "urls e webhook_url sono richiesti"}), 400
-
-    urls = [u.strip() for u in urls_str.split(",") if u.strip()]
-    base_url = request.host_url.rstrip("/")
-
-    # creo annunci fittizi con solo URL (per compatibilità)
-    annunci = [{"link ai documenti dell'annuncio": u} for u in urls]
-
-    threading.Thread(target=process_async, args=(annunci, webhook_url, base_url), daemon=True).start()
-
-    return jsonify({"status": "in lavorazione", "urls": urls}), 202
-
-@app.route("/ricevi_annunci", methods=["POST"])
-def ricevi_annunci():
-    """
-    Riceve il payload completo da Browse AI,
-    estrae la lista degli annunci e avvia il processamento con webhook statico.
-    """
-    data = request.get_json(silent=True) or {}
-    print("[INFO] Payload ricevuto:", data)
-
-    annunci = data.get("task", {}).get("capturedLists", {}).get("Annunci START", [])
-    if not annunci:
-        return jsonify({"error": "Nessun annuncio trovato nel payload"}), 400
-
-    base_url = request.host_url.rstrip("/")
-
-    print(f"[INFO] Estratti {len(annunci)} annunci da processare.")
-    threading.Thread(target=process_async, args=(annunci, WEBHOOK_DEST, base_url), daemon=True).start()
-
-    urls = [a.get("link ai documenti dell'annuncio") for a in annunci if a.get("link ai documenti dell'annuncio")]
-    return jsonify({"status": "in lavorazione", "urls": urls}), 202
-
-if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 5000))
-    app.run(host="0.0.0.0", port=port)
+            prin
