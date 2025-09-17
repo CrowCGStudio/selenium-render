@@ -139,4 +139,53 @@ def process_async(urls, webhook_url, base_url):
         }
 
         try:
-            prin
+            print(f"[INFO] Invio risultati a Zapier per {u}")
+            requests.post(webhook_url, json=payload, timeout=10)
+        except Exception as e:
+            print(f"[ERRORE] Invio webhook fallito per {u}: {e}")
+
+@app.route("/health", methods=["GET"])
+def health():
+    return "ok", 200
+
+@app.route("/files/<path:filename>", methods=["GET"])
+def serve_file(filename):
+    return send_from_directory(DOWNLOAD_DIR, filename, as_attachment=True)
+
+@app.route("/scrape", methods=["POST"])
+def scrape():
+    data = request.get_json(silent=True) or {}
+    url = data.get("url")
+    if not url:
+        return jsonify({"error": "URL mancante"}), 400
+
+    results = scrape_page(url)
+
+    # arricchisco con i link pubblici
+    base = request.host_url.rstrip("/")
+    for r in results:
+        if r.get("saved_file"):
+            encoded_name = quote(r["saved_file"])
+            r["file_url"] = f"{base}/files/{encoded_name}"
+
+    return jsonify({"results": results}), 200
+
+@app.route("/scrape_async", methods=["POST"])
+def scrape_async():
+    data = request.get_json(silent=True) or {}
+    urls_str = data.get("urls")
+    webhook_url = data.get("webhook_url")
+
+    if not urls_str or not webhook_url:
+        return jsonify({"error": "urls e webhook_url sono richiesti"}), 400
+
+    urls = [u.strip() for u in urls_str.split(",") if u.strip()]
+    base_url = request.host_url.rstrip("/")
+
+    threading.Thread(target=process_async, args=(urls, webhook_url, base_url), daemon=True).start()
+
+    return jsonify({"status": "in lavorazione", "urls": urls}), 202
+
+if __name__ == "__main__":
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host="0.0.0.0", port=port)
