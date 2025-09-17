@@ -208,6 +208,14 @@ def ricevi_annunci():
     if not annunci:
         return jsonify({"error": "Nessun annuncio trovato nel payload"}), 400
 
+    # 🔄 Normalizzo subito l’URL a partire da "ID annuncio e anno"
+    for a in annunci:
+        id_annuncio = a.get("ID annuncio e anno")
+        if id_annuncio:
+            a["link ai documenti dell'annuncio"] = (
+                f"https://start.toscana.it/tendering/tenders/{id_annuncio.replace('/', '-')}/view/detail/1"
+            )
+
     base_url = request.host_url.rstrip("/")
 
     print(f"[INFO] Estratti {len(annunci)} annunci da processare.")
