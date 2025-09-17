@@ -16,9 +16,8 @@ from selenium.webdriver.support import expected_conditions as EC
 DOWNLOAD_DIR = os.environ.get("DOWNLOAD_DIR", "/app/downloads")
 os.makedirs(DOWNLOAD_DIR, exist_ok=True)
 
-# Webhook statici Zapier
+# Webhook statico Zapier (destinazione finale)
 WEBHOOK_DEST = "https://hooks.zapier.com/hooks/catch/24277770/umrp8cs/"
-WEBHOOK_RETRY = "https://hooks.zapier.com/hooks/catch/24277770/umfb0h0/"
 
 app = Flask(__name__)
 
@@ -141,19 +140,11 @@ def process_async(annunci, webhook_url, base_url):
             "results": page_results
         }
 
-        # Se non ci sono allegati salvati, invio al webhook di retry
-        if not any(r.get("saved_file") for r in page_results):
-            try:
-                print(f"[INFO] Nessun allegato trovato, invio a webhook RETRY per {url}")
-                requests.post(WEBHOOK_RETRY, json=payload, timeout=10)
-            except Exception as e:
-                print(f"[ERRORE] Invio webhook RETRY fallito per {url}: {e}")
-        else:
-            try:
-                print(f"[INFO] Invio risultati a Zapier per {url}")
-                requests.post(webhook_url, json=payload, timeout=10)
-            except Exception as e:
-                print(f"[ERRORE] Invio webhook fallito per {url}: {e}")
+        try:
+            print(f"[INFO] Invio risultati a Zapier per {url}")
+            requests.post(webhook_url, json=payload, timeout=10)
+        except Exception as e:
+            print(f"[ERRORE] Invio webhook fallito per {url}: {e}")
 
 @app.route("/health", methods=["GET"])
 def health():
