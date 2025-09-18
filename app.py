@@ -156,6 +156,33 @@ def health():
 def serve_file(filename):
     return send_from_directory(DOWNLOAD_DIR, filename, as_attachment=True)
 
+@app.route("/delete_file", methods=["POST"])
+def delete_file():
+    """
+    Cancella un file precedentemente scaricato.
+    Zapier invia l'URL pubblico (es. https://.../files/nomefile.pdf).
+    """
+    data = request.get_json(silent=True) or {}
+    file_url = data.get("file_url")
+
+    if not file_url:
+        return jsonify({"error": "file_url mancante"}), 400
+
+    # Estraggo solo il nome del file dall’URL
+    filename = file_url.split("/files/")[-1]
+    file_path = os.path.join(DOWNLOAD_DIR, filename)
+
+    if not os.path.exists(file_path):
+        return jsonify({"status": "not_found", "file": filename}), 404
+
+    try:
+        os.remove(file_path)
+        print(f"[INFO] File eliminato: {filename}")
+        return jsonify({"status": "deleted", "file": filename}), 200
+    except Exception as e:
+        print(f"[ERRORE] Eliminazione fallita per {filename}: {e}")
+        return jsonify({"status": "error", "file": filename, "error": str(e)}), 500
+
 @app.route("/scrape_async", methods=["POST"])
 def scrape_async():
     """
