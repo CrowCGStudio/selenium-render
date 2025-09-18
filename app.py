@@ -59,7 +59,7 @@ def scrape_page(url: str):
 
         if not list_items:
             print("[INFO] Nessun allegato trovato su questa pagina.")
-            results.append({"message": "Nessun allegato trovato."})
+            results = []  # ← results vuoto
         else:
             print(f"[INFO] Trovati {len(list_items)} possibili allegati.")
             for index, item in enumerate(list_items, start=1):
@@ -102,11 +102,12 @@ def scrape_page(url: str):
 
                 except Exception as e:
                     print(f"[ERRORE] Problema con allegato {index}: {e}")
-                    results.append({"index": index, "error": str(e)})
+                    # non aggiungiamo più entry rumorose → allegato saltato
+                    continue
 
     except Exception as e:
         print(f"[ERRORE] Problema generale con la pagina {url}: {e}")
-        results.append({"error": str(e)})
+        results = []
 
     finally:
         driver.quit()
@@ -137,7 +138,8 @@ def process_async(annunci, webhook_url, base_url):
                 "titolo annuncio": annuncio.get("titolo annuncio"),
                 "stato gara": annuncio.get("stato gara"),
             },
-            "results": page_results
+            "results": page_results,
+            "has_attachments": bool(page_results)  # ← nuovo campo
         }
 
         try:
@@ -153,24 +155,6 @@ def health():
 @app.route("/files/<path:filename>", methods=["GET"])
 def serve_file(filename):
     return send_from_directory(DOWNLOAD_DIR, filename, as_attachment=True)
-
-@app.route("/scrape", methods=["POST"])
-def scrape():
-    data = request.get_json(silent=True) or {}
-    url = data.get("url")
-    if not url:
-        return jsonify({"error": "URL mancante"}), 400
-
-    results = scrape_page(url)
-
-    # arricchisco con i link pubblici
-    base = request.host_url.rstrip("/")
-    for r in results:
-        if r.get("saved_file"):
-            encoded_name = quote(r["saved_file"])
-            r["file_url"] = f"{base}/files/{encoded_name}"
-
-    return jsonify({"results": results}), 200
 
 @app.route("/scrape_async", methods=["POST"])
 def scrape_async():
