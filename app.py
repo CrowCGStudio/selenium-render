@@ -2,6 +2,7 @@ import os
 import time
 import threading
 import requests
+import mimetypes
 from urllib.parse import quote
 from flask import Flask, request, jsonify, send_from_directory
 
@@ -19,7 +20,15 @@ os.makedirs(DOWNLOAD_DIR, exist_ok=True)
 # Webhook statico Zapier (destinazione finale)
 WEBHOOK_DEST = "https://hooks.zapier.com/hooks/catch/24277770/umrp8cs/"
 
+# Gemini API
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
+GEMINI_UPLOAD_ENDPOINT = "https://generativelanguage.googleapis.com/upload/v1beta/files"
+
 app = Flask(__name__)
+
+# ----------------------------
+# Funzioni di supporto
+# ----------------------------
 
 def build_driver():
     chrome_binary = os.environ.get("CHROME_BINARY", "/usr/bin/chromium")
@@ -43,6 +52,24 @@ def build_driver():
     )
 
     return driver
+
+def guess_mime(filename: str) -> str:
+    mt, _ = mimetypes.guess_type(filename)
+    return mt or "application/octet-stream"
+
+def upload_to_gemini(file_path: str, filename: str, api_key: str) -> dict:
+    """Carica un file locale su Gemini e restituisce l'oggetto 'file' (contiene 'uri', ecc.)."""
+    mime_type = guess_mime(filename)
+    headers = {"Authorization": f"Bearer {api_key}"}
+    with open(file_path, "rb") as f:
+        files = {"file": (filename, f, mime_type)}
+        r = requests.post(GEMINI_UPLOAD_ENDPOINT, headers=headers, files=files, timeout=120)
+    r.raise_for_status()
+    return r.json().get("file", {}) or {}
+
+# ----------------------------
+# Selenium scrape
+# ----------------------------
 
 def scrape_page(url: str):
     """Scarica gli allegati da un singolo annuncio."""
@@ -79,9 +106,9 @@ def scrape_page(url: str):
                     time.sleep(0.5)
                     driver.execute_script("arguments[0].click();", link)
 
-                    # Attendo fino a 20s per nuovo file
+                    # Attendo fino a 10s per nuovo file
                     new_file = None
-                    for _ in range(40):  # 40 * 0.5s = 20s
+                    for _ in range(20):
                         time.sleep(0.5)
                         after = set(os.listdir(DOWNLOAD_DIR))
                         created = list(after - before)
@@ -102,7 +129,6 @@ def scrape_page(url: str):
 
                 except Exception as e:
                     print(f"[ERRORE] Problema con allegato {index}: {e}")
-                    # non aggiungiamo più entry rumorose → allegato saltato
                     continue
 
     except Exception as e:
@@ -114,8 +140,12 @@ def scrape_page(url: str):
 
     return results
 
-def process_async(annunci, webhook_url, base_url):
-    """Processa gli annunci uno alla volta e invia i risultati a Zapier via webhook."""
+# ----------------------------
+# Processo asincrono
+# ----------------------------
+
+def process_async(annunci, webhook_url, base_url, gemini_api_key=None):
+    """Processa gli annunci, scarica allegati, li carica su Gemini (se API key presente) e invia a Zapier."""
     for annuncio in annunci:
         url = annuncio.get("link ai documenti dell'annuncio")
         if not url:
@@ -123,11 +153,25 @@ def process_async(annunci, webhook_url, base_url):
 
         page_results = scrape_page(url)
 
-        # arricchisco con i link pubblici
+        # arricchisco con i link pubblici e URI Gemini
         for r in page_results:
-            if r.get("saved_file"):
-                encoded_name = quote(r["saved_file"])
+            saved = r.get("saved_file")
+            if saved:
+                encoded_name = quote(saved)
                 r["file_url"] = f"{base_url}/files/{encoded_name}"
+
+                if gemini_api_key:
+                    file_path = os.path.join(DOWNLOAD_DIR, saved)
+                    try:
+                        file_obj = upload_to_gemini(file_path, saved, gemini_api_key)
+                        r["gemini_uri"] = file_obj.get("uri")
+                        r["gemini_name"] = file_obj.get("name")
+                        r["gemini_mime"] = file_obj.get("mimeType")
+                        r["gemini_state"] = file_obj.get("state")
+                        print(f"[INFO] Upload Gemini completato per {saved} (uri: {r['gemini_uri']})")
+                    except Exception as e:
+                        print(f"[ERRORE] Upload Gemini fallito per {saved}: {e}")
+                        r["gemini_upload"] = "failed"
 
         payload = {
             "url": url,
@@ -139,14 +183,18 @@ def process_async(annunci, webhook_url, base_url):
                 "stato gara": annuncio.get("stato gara"),
             },
             "results": page_results,
-            "has_attachments": bool(page_results)  # ← nuovo campo
+            "has_attachments": bool(page_results)
         }
 
         try:
             print(f"[INFO] Invio risultati a Zapier per {url}")
-            requests.post(webhook_url, json=payload, timeout=10)
+            requests.post(webhook_url, json=payload, timeout=30)
         except Exception as e:
             print(f"[ERRORE] Invio webhook fallito per {url}: {e}")
+
+# ----------------------------
+# Endpoint Flask
+# ----------------------------
 
 @app.route("/health", methods=["GET"])
 def health():
@@ -158,17 +206,11 @@ def serve_file(filename):
 
 @app.route("/delete_file", methods=["POST"])
 def delete_file():
-    """
-    Cancella un file precedentemente scaricato.
-    Zapier invia l'URL pubblico (es. https://.../files/nomefile.pdf).
-    """
     data = request.get_json(silent=True) or {}
     file_url = data.get("file_url")
-
     if not file_url:
         return jsonify({"error": "file_url mancante"}), 400
 
-    # Estraggo solo il nome del file dall’URL
     filename = file_url.split("/files/")[-1]
     file_path = os.path.join(DOWNLOAD_DIR, filename)
 
@@ -185,13 +227,10 @@ def delete_file():
 
 @app.route("/scrape_async", methods=["POST"])
 def scrape_async():
-    """
-    Riceve una stringa di URL separati da virgole e un webhook URL.
-    Avvia il lavoro in background e risponde subito con 'in lavorazione'.
-    """
     data = request.get_json(silent=True) or {}
     urls_str = data.get("urls")
     webhook_url = data.get("webhook_url")
+    gemini_api_key = GEMINI_API_KEY  # usiamo quella da env
 
     if not urls_str or not webhook_url:
         return jsonify({"error": "urls e webhook_url sono richiesti"}), 400
@@ -199,19 +238,18 @@ def scrape_async():
     urls = [u.strip() for u in urls_str.split(",") if u.strip()]
     base_url = request.host_url.rstrip("/")
 
-    # creo annunci fittizi con solo URL (per compatibilità)
     annunci = [{"link ai documenti dell'annuncio": u} for u in urls]
 
-    threading.Thread(target=process_async, args=(annunci, webhook_url, base_url), daemon=True).start()
+    threading.Thread(
+        target=process_async,
+        args=(annunci, webhook_url, base_url, gemini_api_key),
+        daemon=True
+    ).start()
 
-    return jsonify({"status": "in lavorazione", "urls": urls}), 202
+    return jsonify({"status": "in lavorazione", "urls": urls, "gemini_upload": bool(gemini_api_key)}), 202
 
 @app.route("/ricevi_annunci", methods=["POST"])
 def ricevi_annunci():
-    """
-    Riceve il payload completo da Browse AI,
-    estrae la lista degli annunci e avvia il processamento con webhook statico.
-    """
     data = request.get_json(silent=True) or {}
     print("[INFO] Payload ricevuto:", data)
 
@@ -219,7 +257,6 @@ def ricevi_annunci():
     if not annunci:
         return jsonify({"error": "Nessun annuncio trovato nel payload"}), 400
 
-    # 🔄 Normalizzo subito l’URL a partire da "ID annuncio e anno"
     for a in annunci:
         id_annuncio = a.get("ID annuncio e anno")
         if id_annuncio:
@@ -228,12 +265,21 @@ def ricevi_annunci():
             )
 
     base_url = request.host_url.rstrip("/")
+    gemini_api_key = GEMINI_API_KEY
 
     print(f"[INFO] Estratti {len(annunci)} annunci da processare.")
-    threading.Thread(target=process_async, args=(annunci, WEBHOOK_DEST, base_url), daemon=True).start()
+    threading.Thread(
+        target=process_async,
+        args=(annunci, WEBHOOK_DEST, base_url, gemini_api_key),
+        daemon=True
+    ).start()
 
     urls = [a.get("link ai documenti dell'annuncio") for a in annunci if a.get("link ai documenti dell'annuncio")]
-    return jsonify({"status": "in lavorazione", "urls": urls}), 202
+    return jsonify({"status": "in lavorazione", "urls": urls, "gemini_upload": bool(gemini_api_key)}), 202
+
+# ----------------------------
+# Main
+# ----------------------------
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))

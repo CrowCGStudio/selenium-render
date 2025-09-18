@@ -1,28 +1,32 @@
+# Usa una base leggera con Python 3.11
 FROM python:3.11-slim
 
-# Evita prompt interattivi
-ENV DEBIAN_FRONTEND=noninteractive
+# Imposta variabili di ambiente di default (non sensibili)
+ENV PYTHONUNBUFFERED=1 \
+    DOWNLOAD_DIR=/app/downloads \
+    PORT=5000
 
-# Aggiorno e installo Chromium + Chromedriver + librerie necessarie
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    chromium chromium-driver \
-    libnss3 libgdk-pixbuf-2.0-0 libgtk-3-0 libatk-bridge2.0-0 \
-    libdrm2 libxkbcommon0 libgbm1 libasound2 fonts-liberation \
+# Installa dipendenze di sistema (Chromium + Chromedriver)
+RUN apt-get update && apt-get install -y \
+    chromium \
+    chromium-driver \
+    fonts-liberation \
     && rm -rf /var/lib/apt/lists/*
 
-# Variabili utili (usate in app.py)
-ENV CHROME_BINARY=/usr/bin/chromium
-ENV CHROMEDRIVER_PATH=/usr/bin/chromedriver
-ENV DOWNLOAD_DIR=/app/downloads
-RUN mkdir -p /app/downloads
-
-# Installo dipendenze Python
+# Imposta la working dir
 WORKDIR /app
+
+# Copia prima requirements.txt per sfruttare la cache
 COPY requirements.txt .
+
+# Installa pacchetti Python
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copio il codice
-COPY . /app
+# Copia il resto del progetto
+COPY . .
 
-# Avvio gunicorn (usa $PORT fornita da Render), 1 worker basta per iniziare
-CMD ["/bin/sh", "-c", "gunicorn app:app -b 0.0.0.0:${PORT:-5000} --workers 1 --threads 4 --timeout 300"]
+# Espone la porta del servizio
+EXPOSE ${PORT}
+
+# Comando di avvio con Gunicorn (2 worker, 4 thread ciascuno → buono per IO-bound come Selenium)
+CMD ["gunicorn", "--workers=2", "--threads=4", "-b", "0.0.0.0:5000", "app:app"]
