@@ -79,9 +79,9 @@ def scrape_page(url: str):
                     time.sleep(0.5)
                     driver.execute_script("arguments[0].click();", link)
 
-                    # Attendo fino a 10s per nuovo file
+                    # Attendo fino a 20s per nuovo file
                     new_file = None
-                    for _ in range(20):
+                    for _ in range(40):  # 40 * 0.5s = 20s
                         time.sleep(0.5)
                         after = set(os.listdir(DOWNLOAD_DIR))
                         created = list(after - before)
