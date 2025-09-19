@@ -62,9 +62,17 @@ def upload_to_gemini(file_path: str, filename: str, api_key: str) -> dict:
     """Carica un file locale su Gemini usando upload multipart e restituisce l'oggetto 'file'."""
     mime_type = guess_mime(filename)
     url = GEMINI_UPLOAD_ENDPOINT + "?uploadType=multipart"
-    headers = {"Authorization": f"Bearer {api_key}"}
 
-    metadata = {"file": {"display_name": filename}}
+    headers = {
+        "x-goog-api-key": api_key,  # API key passata correttamente
+    }
+
+    metadata = {
+        "file": {
+            "display_name": filename,
+            "mime_type": mime_type
+        }
+    }
 
     with open(file_path, "rb") as f:
         files = {
