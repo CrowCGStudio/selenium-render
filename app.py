@@ -58,14 +58,39 @@ def guess_mime(filename: str) -> str:
     return mt or "application/octet-stream"
 
 def upload_to_gemini(file_path: str, filename: str, api_key: str) -> dict:
-    """Carica un file locale su Gemini e restituisce l'oggetto 'file' (contiene 'uri', ecc.)."""
+    """Carica un file locale su Gemini usando resumable upload e restituisce l'oggetto 'file'."""
     mime_type = guess_mime(filename)
-    headers = {"Authorization": f"Bearer {api_key}"}
+    size_bytes = os.path.getsize(file_path)
+
+    # Step 1: start
+    start_headers = {
+        "Authorization": f"Bearer {api_key}",
+        "X-Goog-Upload-Protocol": "resumable",
+        "X-Goog-Upload-Command": "start",
+        "X-Goog-Upload-Header-Content-Length": str(size_bytes),
+        "X-Goog-Upload-Header-Content-Type": mime_type,
+        "Content-Type": "application/json",
+    }
+    start_body = {"file": {"display_name": filename}}
+    r1 = requests.post(GEMINI_UPLOAD_ENDPOINT, headers=start_headers, json=start_body, timeout=30)
+    r1.raise_for_status()
+    upload_url = r1.headers.get("X-Goog-Upload-Url")
+    if not upload_url:
+        raise RuntimeError("Gemini non ha restituito X-Goog-Upload-Url")
+
+    # Step 2: upload + finalize
     with open(file_path, "rb") as f:
-        files = {"file": (filename, f, mime_type)}
-        r = requests.post(GEMINI_UPLOAD_ENDPOINT, headers=headers, files=files, timeout=120)
-    r.raise_for_status()
-    return r.json().get("file", {}) or {}
+        file_bytes = f.read()
+
+    upload_headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Length": str(len(file_bytes)),
+        "X-Goog-Upload-Offset": "0",
+        "X-Goog-Upload-Command": "upload, finalize",
+    }
+    r2 = requests.post(upload_url, headers=upload_headers, data=file_bytes, timeout=120)
+    r2.raise_for_status()
+    return r2.json().get("file", {}) or {}
 
 # ----------------------------
 # Selenium scrape
