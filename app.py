@@ -47,7 +47,6 @@ def build_driver():
     service = Service(chromedriver_path)
     driver = webdriver.Chrome(service=service, options=options)
 
-    # Dico a Chrome headless dove salvare i file
     driver.execute_cdp_cmd(
         "Page.setDownloadBehavior",
         {"behavior": "allow", "downloadPath": DOWNLOAD_DIR}
@@ -60,13 +59,10 @@ def guess_mime(filename: str) -> str:
     return mt or "application/octet-stream"
 
 def sbusta_p7m(file_path: str) -> str:
-    """Estrae il contenuto da un .p7m usando openssl.
-    Se riesce, elimina l'originale e ritorna il nuovo file path.
-    """
     if not file_path.lower().endswith(".p7m"):
         return file_path
 
-    output_path = file_path.rsplit(".p7m", 1)[0]  # rimuove estensione
+    output_path = file_path.rsplit(".p7m", 1)[0]
     try:
         subprocess.run(
             ["openssl", "smime", "-verify",
@@ -75,27 +71,17 @@ def sbusta_p7m(file_path: str) -> str:
             check=True
         )
         print(f"[INFO] Sbustato {file_path} → {output_path}")
-        os.remove(file_path)  # elimina l'originale .p7m
+        os.remove(file_path)
         return output_path
     except Exception as e:
         print(f"[ERRORE] Sbustamento fallito per {file_path}: {e}")
         return file_path
 
 def upload_to_gemini(file_path: str, filename: str, api_key: str) -> dict:
-    """Carica un file locale su Gemini usando upload multipart e restituisce l'oggetto 'file'."""
     mime_type = guess_mime(filename)
     url = GEMINI_UPLOAD_ENDPOINT + "?uploadType=multipart"
-
-    headers = {
-        "x-goog-api-key": api_key,
-    }
-
-    metadata = {
-        "file": {
-            "display_name": filename,
-            "mime_type": mime_type
-        }
-    }
+    headers = {"x-goog-api-key": api_key}
+    metadata = {"file": {"display_name": filename, "mime_type": mime_type}}
 
     with open(file_path, "rb") as f:
         files = {
@@ -111,7 +97,6 @@ def upload_to_gemini(file_path: str, filename: str, api_key: str) -> dict:
 # ----------------------------
 
 def scrape_page(url: str):
-    """Scarica gli allegati da un singolo annuncio."""
     driver = build_driver()
     results = []
 
@@ -155,11 +140,7 @@ def scrape_page(url: str):
                             print(f"[INFO] → File scaricato: {new_file}")
                             break
 
-                    result = {
-                        "index": index,
-                        "label": file_label,
-                        "href": href
-                    }
+                    result = {"index": index, "label": file_label, "href": href}
                     if new_file:
                         result["saved_file"] = new_file
                     results.append(result)
@@ -193,8 +174,6 @@ def process_async(annunci, webhook_url, base_url, gemini_api_key=None):
             saved = r.get("saved_file")
             if saved:
                 file_path = os.path.join(DOWNLOAD_DIR, saved)
-
-                # ✅ Sbustamento p7m se necessario
                 file_path = sbusta_p7m(file_path)
                 saved = os.path.basename(file_path)
 
@@ -242,12 +221,14 @@ def health():
 
 @app.route("/list_files", methods=["GET"])
 def list_files():
-    """Ritorna la lista dei file attualmente presenti nella cartella di download."""
+    """Logga i file presenti nella cartella downloads invece di restituirli in JSON."""
     try:
         files = os.listdir(DOWNLOAD_DIR)
-        return jsonify({"files": files, "count": len(files)}), 200
+        print(f"[INFO] File presenti ({len(files)}): {files}")
+        return "lista file stampata nei log", 200
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        print(f"[ERRORE] list_files: {e}")
+        return "errore, vedi log", 500
 
 @app.route("/files/<path:filename>", methods=["GET"])
 def serve_file(filename):
