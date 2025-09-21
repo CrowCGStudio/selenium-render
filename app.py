@@ -4,6 +4,7 @@ import threading
 import requests
 import mimetypes
 import json
+import subprocess
 from urllib.parse import quote
 from flask import Flask, request, jsonify, send_from_directory
 
@@ -58,13 +59,35 @@ def guess_mime(filename: str) -> str:
     mt, _ = mimetypes.guess_type(filename)
     return mt or "application/octet-stream"
 
+def sbusta_p7m(file_path: str) -> str:
+    """Estrae il contenuto da un .p7m usando openssl.
+    Se riesce, elimina l'originale e ritorna il nuovo file path.
+    """
+    if not file_path.lower().endswith(".p7m"):
+        return file_path
+
+    output_path = file_path.rsplit(".p7m", 1)[0]  # rimuove estensione
+    try:
+        subprocess.run(
+            ["openssl", "smime", "-verify",
+             "-in", file_path, "-inform", "DER",
+             "-noverify", "-out", output_path],
+            check=True
+        )
+        print(f"[INFO] Sbustato {file_path} → {output_path}")
+        os.remove(file_path)  # elimina l'originale .p7m
+        return output_path
+    except Exception as e:
+        print(f"[ERRORE] Sbustamento fallito per {file_path}: {e}")
+        return file_path
+
 def upload_to_gemini(file_path: str, filename: str, api_key: str) -> dict:
     """Carica un file locale su Gemini usando upload multipart e restituisce l'oggetto 'file'."""
     mime_type = guess_mime(filename)
     url = GEMINI_UPLOAD_ENDPOINT + "?uploadType=multipart"
 
     headers = {
-        "x-goog-api-key": api_key,  # API key passata correttamente
+        "x-goog-api-key": api_key,
     }
 
     metadata = {
@@ -169,11 +192,16 @@ def process_async(annunci, webhook_url, base_url, gemini_api_key=None):
         for r in page_results:
             saved = r.get("saved_file")
             if saved:
+                file_path = os.path.join(DOWNLOAD_DIR, saved)
+
+                # ✅ Sbustamento p7m se necessario
+                file_path = sbusta_p7m(file_path)
+                saved = os.path.basename(file_path)
+
                 encoded_name = quote(saved)
                 r["file_url"] = f"{base_url}/files/{encoded_name}"
 
                 if gemini_api_key:
-                    file_path = os.path.join(DOWNLOAD_DIR, saved)
                     try:
                         file_obj = upload_to_gemini(file_path, saved, gemini_api_key)
                         r["gemini_uri"] = file_obj.get("uri")

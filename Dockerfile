@@ -6,11 +6,12 @@ ENV PYTHONUNBUFFERED=1 \
     DOWNLOAD_DIR=/app/downloads \
     PORT=5000
 
-# Installa dipendenze di sistema (Chromium + Chromedriver)
+# Installa dipendenze di sistema (Chromium + Chromedriver + OpenSSL)
 RUN apt-get update && apt-get install -y \
     chromium \
     chromium-driver \
     fonts-liberation \
+    openssl \
     && rm -rf /var/lib/apt/lists/*
 
 # Imposta la working dir
