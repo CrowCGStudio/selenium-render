@@ -240,6 +240,15 @@ def process_async(annunci, webhook_url, base_url, gemini_api_key=None):
 def health():
     return "ok", 200
 
+@app.route("/list_files", methods=["GET"])
+def list_files():
+    """Ritorna la lista dei file attualmente presenti nella cartella di download."""
+    try:
+        files = os.listdir(DOWNLOAD_DIR)
+        return jsonify({"files": files, "count": len(files)}), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
 @app.route("/files/<path:filename>", methods=["GET"])
 def serve_file(filename):
     return send_from_directory(DOWNLOAD_DIR, filename, as_attachment=True)
