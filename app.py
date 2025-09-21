@@ -5,7 +5,7 @@ import requests
 import mimetypes
 import json
 import subprocess
-from urllib.parse import quote
+from urllib.parse import quote, unquote
 from flask import Flask, request, jsonify, send_from_directory
 
 from selenium import webdriver
@@ -247,9 +247,11 @@ def delete_file():
         return jsonify({"error": "file_url mancante"}), 400
 
     filename = file_url.split("/files/")[-1]
+    filename = unquote(filename)  # ✅ decodifica %20 → spazio
     file_path = os.path.join(DOWNLOAD_DIR, filename)
 
     if not os.path.exists(file_path):
+        print(f"[ERRORE] delete_file: {filename} non trovato in {DOWNLOAD_DIR}", flush=True)
         return jsonify({"status": "not_found", "file": filename}), 404
 
     try:
