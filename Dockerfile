@@ -1,6 +1,9 @@
 # Usa una base leggera con Python 3.11
 FROM python:3.11-slim
 
+# Evita prompt interattivi di debconf (fix per Term/ReadLine.pm mancante)
+ENV DEBIAN_FRONTEND=noninteractive
+
 # Imposta variabili di ambiente di default (non sensibili)
 ENV PYTHONUNBUFFERED=1 \
     DOWNLOAD_DIR=/app/downloads \
