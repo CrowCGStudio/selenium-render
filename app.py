@@ -70,11 +70,11 @@ def sbusta_p7m(file_path: str) -> str:
              "-noverify", "-out", output_path],
             check=True
         )
-        print(f"[INFO] Sbustato {file_path} → {output_path}")
+        print(f"[INFO] Sbustato {file_path} → {output_path}", flush=True)
         os.remove(file_path)
         return output_path
     except Exception as e:
-        print(f"[ERRORE] Sbustamento fallito per {file_path}: {e}")
+        print(f"[ERRORE] Sbustamento fallito per {file_path}: {e}", flush=True)
         return file_path
 
 def upload_to_gemini(file_path: str, filename: str, api_key: str) -> dict:
@@ -101,7 +101,7 @@ def scrape_page(url: str):
     results = []
 
     try:
-        print(f"[INFO] Navigo: {url}")
+        print(f"[INFO] Navigo: {url}", flush=True)
         driver.get(url)
 
         wait = WebDriverWait(driver, 20)
@@ -109,10 +109,10 @@ def scrape_page(url: str):
         list_items = driver.find_elements(By.CSS_SELECTOR, ".list-detail-view.sortable")
 
         if not list_items:
-            print("[INFO] Nessun allegato trovato su questa pagina.")
+            print("[INFO] Nessun allegato trovato su questa pagina.", flush=True)
             results = []
         else:
-            print(f"[INFO] Trovati {len(list_items)} possibili allegati.")
+            print(f"[INFO] Trovati {len(list_items)} possibili allegati.", flush=True)
             for index, item in enumerate(list_items, start=1):
                 try:
                     link = item.find_element(By.CSS_SELECTOR, 'a[data-qa="attachment"]')
@@ -121,7 +121,7 @@ def scrape_page(url: str):
                         file_label = file_label.rsplit(".", 1)[0]
 
                     href = link.get_attribute("href")
-                    print(f"[INFO] ({index}) Allegato trovato: {file_label} ({href})")
+                    print(f"[INFO] ({index}) Allegato trovato: {file_label} ({href})", flush=True)
 
                     before = set(os.listdir(DOWNLOAD_DIR))
 
@@ -137,7 +137,7 @@ def scrape_page(url: str):
                         created = [f for f in created if not f.endswith(".crdownload") and not f.endswith(".tmp")]
                         if created:
                             new_file = created[0]
-                            print(f"[INFO] → File scaricato: {new_file}")
+                            print(f"[INFO] → File scaricato: {new_file}", flush=True)
                             break
 
                     result = {"index": index, "label": file_label, "href": href}
@@ -146,11 +146,11 @@ def scrape_page(url: str):
                     results.append(result)
 
                 except Exception as e:
-                    print(f"[ERRORE] Problema con allegato {index}: {e}")
+                    print(f"[ERRORE] Problema con allegato {index}: {e}", flush=True)
                     continue
 
     except Exception as e:
-        print(f"[ERRORE] Problema generale con la pagina {url}: {e}")
+        print(f"[ERRORE] Problema generale con la pagina {url}: {e}", flush=True)
         results = []
 
     finally:
@@ -187,9 +187,9 @@ def process_async(annunci, webhook_url, base_url, gemini_api_key=None):
                         r["gemini_name"] = file_obj.get("name")
                         r["gemini_mime"] = file_obj.get("mimeType")
                         r["gemini_state"] = file_obj.get("state")
-                        print(f"[INFO] Upload Gemini completato per {saved} (uri: {r['gemini_uri']})")
+                        print(f"[INFO] Upload Gemini completato per {saved} (uri: {r['gemini_uri']})", flush=True)
                     except Exception as e:
-                        print(f"[ERRORE] Upload Gemini fallito per {saved}: {e}")
+                        print(f"[ERRORE] Upload Gemini fallito per {saved}: {e}", flush=True)
                         r["gemini_upload"] = "failed"
 
         payload = {
@@ -206,10 +206,10 @@ def process_async(annunci, webhook_url, base_url, gemini_api_key=None):
         }
 
         try:
-            print(f"[INFO] Invio risultati a Zapier per {url}")
+            print(f"[INFO] Invio risultati a Zapier per {url}", flush=True)
             requests.post(webhook_url, json=payload, timeout=30)
         except Exception as e:
-            print(f"[ERRORE] Invio webhook fallito per {url}: {e}")
+            print(f"[ERRORE] Invio webhook fallito per {url}: {e}", flush=True)
 
 # ----------------------------
 # Endpoint Flask
@@ -221,14 +221,19 @@ def health():
 
 @app.route("/list_files", methods=["GET"])
 def list_files():
-    """Logga i file presenti nella cartella downloads invece di restituirli in JSON."""
+    """Mostra e logga i file presenti nella cartella downloads."""
     try:
         files = os.listdir(DOWNLOAD_DIR)
-        print(f"[INFO] File presenti ({len(files)}): {files}")
-        return "lista file stampata nei log", 200
+        if files:
+            msg = f"[INFO] File presenti ({len(files)}): {files}"
+        else:
+            msg = "[INFO] Nessun file presente nella cartella di download."
+        print(msg, flush=True)
+        return msg, 200
     except Exception as e:
-        print(f"[ERRORE] list_files: {e}")
-        return "errore, vedi log", 500
+        err = f"[ERRORE] list_files: {e}"
+        print(err, flush=True)
+        return err, 500
 
 @app.route("/files/<path:filename>", methods=["GET"])
 def serve_file(filename):
@@ -249,10 +254,10 @@ def delete_file():
 
     try:
         os.remove(file_path)
-        print(f"[INFO] File eliminato: {filename}")
+        print(f"[INFO] File eliminato: {filename}", flush=True)
         return jsonify({"status": "deleted", "file": filename}), 200
     except Exception as e:
-        print(f"[ERRORE] Eliminazione fallita per {filename}: {e}")
+        print(f"[ERRORE] Eliminazione fallita per {filename}: {e}", flush=True)
         return jsonify({"status": "error", "file": filename, "error": str(e)}), 500
 
 @app.route("/scrape_async", methods=["POST"])
@@ -281,7 +286,7 @@ def scrape_async():
 @app.route("/ricevi_annunci", methods=["POST"])
 def ricevi_annunci():
     data = request.get_json(silent=True) or {}
-    print("[INFO] Payload ricevuto:", data)
+    print("[INFO] Payload ricevuto:", data, flush=True)
 
     annunci = data.get("task", {}).get("capturedLists", {}).get("Annunci START", [])
     if not annunci:
@@ -297,7 +302,7 @@ def ricevi_annunci():
     base_url = request.host_url.rstrip("/")
     gemini_api_key = GEMINI_API_KEY
 
-    print(f"[INFO] Estratti {len(annunci)} annunci da processare.")
+    print(f"[INFO] Estratti {len(annunci)} annunci da processare.", flush=True)
     threading.Thread(
         target=process_async,
         args=(annunci, WEBHOOK_DEST, base_url, gemini_api_key),
