@@ -32,6 +32,9 @@ GEMINI_UPLOAD_ENDPOINT = "https://generativelanguage.googleapis.com/upload/v1bet
 # Whitelist CPV (prime due cifre valide)
 CPV_WHITELIST = {"30","32","48","51","64","72","73","79","80","85","90","92","98"}
 
+# Cartella padre su Drive (condivisa col service account)
+PARENT_DRIVE_FOLDER = os.environ.get("PARENT_DRIVE_FOLDER_ID")
+
 app = Flask(__name__)
 
 # ----------------------------
@@ -178,10 +181,10 @@ def process_async(annunci, webhook_url, base_url, gemini_api_key=None):
 
         page_results = scrape_page(url)
 
-        # 📂 Crea cartella Drive per questo annuncio
+        # 📂 Crea cartella Drive per questo annuncio dentro la cartella condivisa
         titolo_annuncio = annuncio.get("titolo annuncio", "senza_titolo")
         try:
-            drive_folder_id = create_folder(drive_service, titolo_annuncio)
+            drive_folder_id = create_folder(drive_service, titolo_annuncio, parent_folder_id=PARENT_DRIVE_FOLDER)
             print(f"[INFO] Cartella Drive creata: {drive_folder_id}", flush=True)
         except Exception as e:
             print(f"[ERRORE] Creazione cartella Drive fallita: {e}", flush=True)
