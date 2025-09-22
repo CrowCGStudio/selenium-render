@@ -14,7 +14,6 @@ from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
-from selenium.common.exceptions import NoSuchElementException
 
 # Cartella per i download
 DOWNLOAD_DIR = os.environ.get("DOWNLOAD_DIR", "/app/downloads")
@@ -92,46 +91,6 @@ def upload_to_gemini(file_path: str, filename: str, api_key: str) -> dict:
         r = requests.post(url, headers=headers, files=files, timeout=120)
         r.raise_for_status()
         return r.json().get("file", {}) or {}
-
-# ----------------------------
-# CPV filtering
-# ----------------------------
-
-DIVISIONI_AMMESSE = {
-    "30", "32", "48", "51", "64", "72", "73",
-    "79", "80", "85", "90", "92", "98"
-}
-
-def cpv_divisione_ammessa(annuncio_id: str) -> bool:
-    """
-    Controlla la pagina /2 dell'annuncio e ritorna True se la divisione CPV è ammessa.
-    Se non riesce a trovare il CPV → include comunque l'annuncio.
-    """
-    url = f"https://start.toscana.it/tendering/tenders/{annuncio_id}/view/detail/2"
-    driver = build_driver()
-    try:
-        driver.get(url)
-        span = driver.find_element(By.CSS_SELECTOR, "span[data-qa='remove-primary-cat-container']")
-        testo = (span.text or "").strip()
-        codice = testo.split(".")[0].strip() if "." in testo else testo
-        divisione = codice[:2]
-
-        if divisione in DIVISIONI_AMMESSE:
-            print(f"[INFO] Annuncio {annuncio_id} ammesso (divisione {divisione})", flush=True)
-            return True
-        else:
-            print(f"[INFO] Annuncio {annuncio_id} scartato (divisione {divisione} non ammessa)", flush=True)
-            return False
-
-    except NoSuchElementException:
-        print(f"[WARN] Annuncio {annuncio_id}: nessun codice CPV trovato → incluso per sicurezza", flush=True)
-        return True
-    except Exception as e:
-        print(f"[ERRORE] Controllo CPV fallito per {annuncio_id}: {e} → incluso per sicurezza", flush=True)
-        return True
-    finally:
-        driver.quit()
-
 
 # ----------------------------
 # Selenium scrape
@@ -262,6 +221,7 @@ def health():
 
 @app.route("/list_files", methods=["GET"])
 def list_files():
+    """Mostra e logga i file presenti nella cartella downloads."""
     try:
         files = os.listdir(DOWNLOAD_DIR)
         if files:
@@ -287,7 +247,7 @@ def delete_file():
         return jsonify({"error": "file_url mancante"}), 400
 
     filename = file_url.split("/files/")[-1]
-    filename = unquote(filename)
+    filename = unquote(filename)  # ✅ decodifica %20 → spazio
     file_path = os.path.join(DOWNLOAD_DIR, filename)
 
     if not os.path.exists(file_path):
@@ -334,34 +294,24 @@ def ricevi_annunci():
     if not annunci:
         return jsonify({"error": "Nessun annuncio trovato nel payload"}), 400
 
-    # Costruisci URL e filtra con CPV
-    filtrati = []
     for a in annunci:
         id_annuncio = a.get("ID annuncio e anno")
-        if not id_annuncio:
-            continue
-        annuncio_id = id_annuncio.replace("/", "-")
-
-        if cpv_divisione_ammessa(annuncio_id):
+        if id_annuncio:
             a["link ai documenti dell'annuncio"] = (
-                f"https://start.toscana.it/tendering/tenders/{annuncio_id}/view/detail/1"
+                f"https://start.toscana.it/tendering/tenders/{id_annuncio.replace('/', '-')}/view/detail/1"
             )
-            filtrati.append(a)
-        else:
-            print(f"[INFO] Annuncio {id_annuncio} escluso dopo controllo CPV", flush=True)
 
     base_url = request.host_url.rstrip("/")
     gemini_api_key = GEMINI_API_KEY
 
-    print(f"[INFO] Estratti {len(filtrati)} annunci validi da processare.", flush=True)
-    if filtrati:
-        threading.Thread(
-            target=process_async,
-            args=(filtrati, WEBHOOK_DEST, base_url, gemini_api_key),
-            daemon=True
-        ).start()
+    print(f"[INFO] Estratti {len(annunci)} annunci da processare.", flush=True)
+    threading.Thread(
+        target=process_async,
+        args=(annunci, WEBHOOK_DEST, base_url, gemini_api_key),
+        daemon=True
+    ).start()
 
-    urls = [a.get("link ai documenti dell'annuncio") for a in filtrati if a.get("link ai documenti dell'annuncio")]
+    urls = [a.get("link ai documenti dell'annuncio") for a in annunci if a.get("link ai documenti dell'annuncio")]
     return jsonify({"status": "in lavorazione", "urls": urls, "gemini_upload": bool(gemini_api_key)}), 202
 
 # ----------------------------
