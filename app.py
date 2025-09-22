@@ -212,6 +212,33 @@ def process_async(annunci, webhook_url, base_url, gemini_api_key=None):
             print(f"[ERRORE] Invio webhook fallito per {url}: {e}", flush=True)
 
 # ----------------------------
+# Filtro annunci (nuovo layer)
+# ----------------------------
+
+def filter_annunci(annunci):
+    """
+    Funzione segnaposto per filtrare la lista degli annunci.
+    Al momento non applica nessun filtro.
+    In futuro qui ci saranno operazioni complesse.
+    """
+    print(f"[DEBUG] 🔍 Filtro annunci attivato. Numero annunci in ingresso: {len(annunci)}", flush=True)
+    # TODO: logica di filtraggio avanzata
+    return annunci
+
+
+def filtro_e_processa(annunci, webhook_url, base_url, gemini_api_key=None):
+    """
+    Layer intermedio che prima filtra, poi chiama process_async.
+    """
+    annunci_filtrati = filter_annunci(annunci)
+    print(f"[INFO] Dopo filtro restano {len(annunci_filtrati)} annunci.", flush=True)
+
+    if annunci_filtrati:
+        process_async(annunci_filtrati, webhook_url, base_url, gemini_api_key)
+    else:
+        print("[INFO] Nessun annuncio da processare dopo il filtro.", flush=True)
+
+# ----------------------------
 # Endpoint Flask
 # ----------------------------
 
@@ -221,7 +248,6 @@ def health():
 
 @app.route("/list_files", methods=["GET"])
 def list_files():
-    """Mostra e logga i file presenti nella cartella downloads."""
     try:
         files = os.listdir(DOWNLOAD_DIR)
         if files:
@@ -247,7 +273,7 @@ def delete_file():
         return jsonify({"error": "file_url mancante"}), 400
 
     filename = file_url.split("/files/")[-1]
-    filename = unquote(filename)  # ✅ decodifica %20 → spazio
+    filename = unquote(filename)
     file_path = os.path.join(DOWNLOAD_DIR, filename)
 
     if not os.path.exists(file_path):
@@ -294,6 +320,7 @@ def ricevi_annunci():
     if not annunci:
         return jsonify({"error": "Nessun annuncio trovato nel payload"}), 400
 
+    # Costruzione URL documenti
     for a in annunci:
         id_annuncio = a.get("ID annuncio e anno")
         if id_annuncio:
@@ -301,18 +328,23 @@ def ricevi_annunci():
                 f"https://start.toscana.it/tendering/tenders/{id_annuncio.replace('/', '-')}/view/detail/1"
             )
 
+    print(f"[INFO] Estratti {len(annunci)} annunci da processare.", flush=True)
+
     base_url = request.host_url.rstrip("/")
     gemini_api_key = GEMINI_API_KEY
 
-    print(f"[INFO] Estratti {len(annunci)} annunci da processare.", flush=True)
+    # ✅ Rispondo SUBITO a Zapier
+    urls = [a.get("link ai documenti dell'annuncio") for a in annunci if a.get("link ai documenti dell'annuncio")]
+    response = {"status": "in lavorazione", "urls": urls, "gemini_upload": bool(gemini_api_key)}
+
+    # Avvio in parallelo il layer filtro → process_async
     threading.Thread(
-        target=process_async,
+        target=filtro_e_processa,
         args=(annunci, WEBHOOK_DEST, base_url, gemini_api_key),
         daemon=True
     ).start()
 
-    urls = [a.get("link ai documenti dell'annuncio") for a in annunci if a.get("link ai documenti dell'annuncio")]
-    return jsonify({"status": "in lavorazione", "urls": urls, "gemini_upload": bool(gemini_api_key)}), 202
+    return jsonify(response), 202
 
 # ----------------------------
 # Main
