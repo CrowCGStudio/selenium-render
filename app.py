@@ -105,14 +105,23 @@ DIVISIONI_AMMESSE = {
 def cpv_divisione_ammessa(annuncio_id: str) -> bool:
     """
     Controlla la pagina /2 dell'annuncio e ritorna True se la divisione CPV è ammessa.
-    Se non riesce a trovare il CPV → include comunque l'annuncio.
+    Se non riesce a trovare il CPV entro 20s → include comunque l'annuncio.
     """
     url = f"https://start.toscana.it/tendering/tenders/{annuncio_id}/view/detail/2"
     driver = build_driver()
     try:
         driver.get(url)
-        span = driver.find_element(By.CSS_SELECTOR, "span[data-qa='remove-primary-cat-container']")
+
+        wait = WebDriverWait(driver, 20)
+        span = wait.until(
+            EC.presence_of_element_located(
+                (By.CSS_SELECTOR, "div[data-qa='primary-category'] span[data-qa='remove-primary-cat-container']")
+            )
+        )
+
         testo = (span.text or "").strip()
+        print(f"[DEBUG] Testo CPV trovato per {annuncio_id}: {testo}", flush=True)
+
         codice = testo.split(".")[0].strip() if "." in testo else testo
         divisione = codice[:2]
 
@@ -123,15 +132,11 @@ def cpv_divisione_ammessa(annuncio_id: str) -> bool:
             print(f"[INFO] Annuncio {annuncio_id} scartato (divisione {divisione} non ammessa)", flush=True)
             return False
 
-    except NoSuchElementException:
-        print(f"[WARN] Annuncio {annuncio_id}: nessun codice CPV trovato → incluso per sicurezza", flush=True)
-        return True
     except Exception as e:
-        print(f"[ERRORE] Controllo CPV fallito per {annuncio_id}: {e} → incluso per sicurezza", flush=True)
+        print(f"[WARN] Annuncio {annuncio_id}: CPV non trovato o errore ({e}) → incluso per sicurezza", flush=True)
         return True
     finally:
         driver.quit()
-
 
 # ----------------------------
 # Selenium scrape
