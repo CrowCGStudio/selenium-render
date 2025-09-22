@@ -26,6 +26,9 @@ WEBHOOK_DEST = "https://hooks.zapier.com/hooks/catch/24277770/umrp8cs/"
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 GEMINI_UPLOAD_ENDPOINT = "https://generativelanguage.googleapis.com/upload/v1beta/files"
 
+# Whitelist CPV (prime due cifre valide)
+CPV_WHITELIST = {"30","32","48","51","64","72","73","79","80","85","90","92","98"}
+
 app = Flask(__name__)
 
 # ----------------------------
@@ -217,13 +220,55 @@ def process_async(annunci, webhook_url, base_url, gemini_api_key=None):
 
 def filter_annunci(annunci):
     """
-    Funzione segnaposto per filtrare la lista degli annunci.
-    Al momento non applica nessun filtro.
-    In futuro qui ci saranno operazioni complesse.
+    Filtra gli annunci in base al codice CPV principale (prime due cifre).
+    Visita la pagina /2, estrae il codice e confronta con CPV_WHITELIST.
     """
     print(f"[DEBUG] 🔍 Filtro annunci attivato. Numero annunci in ingresso: {len(annunci)}", flush=True)
-    # TODO: logica di filtraggio avanzata
-    return annunci
+
+    filtrati = []
+    driver = build_driver()
+
+    try:
+        for annuncio in annunci:
+            url = annuncio.get("link ai documenti dell'annuncio")
+            if not url:
+                continue
+
+            filtro_url = url.rstrip("/1") + "/2" if url.endswith("/1") else url + "/2"
+            print(f"[INFO] Controllo filtro CPV su: {filtro_url}", flush=True)
+
+            try:
+                driver.get(filtro_url)
+
+                wait = WebDriverWait(driver, 20)
+                elem = wait.until(
+                    EC.presence_of_element_located((
+                        By.CSS_SELECTOR,
+                        "div.classification-user-cat-list[data-qa='primary-category'] "
+                        "div.classification-user-cat "
+                        "span[data-qa='remove-primary-cat-container']"
+                    ))
+                )
+
+                text_val = elem.text.strip()
+                cpv_code = text_val.split(".")[0].strip() if "." in text_val else text_val.strip()
+                first_two = cpv_code[:2]
+
+                if first_two in CPV_WHITELIST:
+                    print(f"[INFO] ✅ Annuncio mantenuto (CPV {cpv_code}, codice {first_two} in whitelist)", flush=True)
+                    filtrati.append(annuncio)
+                else:
+                    print(f"[INFO] ❌ Annuncio scartato (CPV {cpv_code}, codice {first_two} non in whitelist)", flush=True)
+
+            except Exception as e:
+                print(f"[ERRORE] Problema durante il filtraggio di {filtro_url}: {e}", flush=True)
+                # fallback: meglio scartare se non riusciamo a leggere il codice
+                continue
+
+    finally:
+        driver.quit()
+
+    return filtrati
 
 
 def filtro_e_processa(annunci, webhook_url, base_url, gemini_api_key=None):
