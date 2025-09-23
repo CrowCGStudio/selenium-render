@@ -49,12 +49,31 @@ def build_driver():
     service = Service(chromedriver_path)
     driver = webdriver.Chrome(service=service, options=options)
 
-    driver.execute_cdp_cmd(
-        "Page.setDownloadBehavior",
-        {"behavior": "allow", "downloadPath": DOWNLOAD_DIR}
-    )
+    # ✅ Consenti download base
+    try:
+        driver.execute_cdp_cmd(
+            "Page.setDownloadBehavior",
+            {"behavior": "allow", "downloadPath": DOWNLOAD_DIR}
+        )
+    except Exception as e:
+        print(f"[WARN] setDownloadBehavior fallito: {e}", flush=True)
+
+    # ✅ Tenta permesso automatic-downloads (ma non è obbligatorio)
+    try:
+        driver.execute_cdp_cmd(
+            "Browser.setPermission",
+            {
+                "permission": {"name": "automatic-downloads"},
+                "origin": "https://start.toscana.it",
+                "setting": "granted",
+            }
+        )
+        print("[INFO] Permesso automatic-downloads concesso a start.toscana.it", flush=True)
+    except Exception as e:
+        print(f"[WARN] setPermission automatic-downloads non supportato: {e}", flush=True)
 
     return driver
+
 
 def guess_mime(filename: str) -> str:
     mt, _ = mimetypes.guess_type(filename)
