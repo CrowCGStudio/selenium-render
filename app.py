@@ -20,8 +20,7 @@ DOWNLOAD_DIR = os.environ.get("DOWNLOAD_DIR", "/app/downloads")
 os.makedirs(DOWNLOAD_DIR, exist_ok=True)
 
 # Webhook statico Zapier (destinazione finale)
-WEBHOOK_DEST = "https://hooks.zapier.com/hooks/catch/24277770/umrp8cs/"
-
+WEBHOOK_DEST = os.environ.get("WEBHOOK_DEST")
 # Gemini API
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 GEMINI_UPLOAD_ENDPOINT = "https://generativelanguage.googleapis.com/upload/v1beta/files"
