@@ -1,36 +1,38 @@
-# Usa una base leggera con Python 3.11
+# Usa Python slim come base
 FROM python:3.11-slim
 
-# Evita prompt interattivi di debconf (fix per Term/ReadLine.pm mancante)
-ENV DEBIAN_FRONTEND=noninteractive
-
-# Imposta variabili di ambiente di default (non sensibili)
+# Variabili di ambiente
 ENV PYTHONUNBUFFERED=1 \
-    DOWNLOAD_DIR=/app/downloads \
-    PORT=5000
+    PYTHONDONTWRITEBYTECODE=1
 
-# Installa dipendenze di sistema (Chromium + Chromedriver + OpenSSL)
-RUN apt-get update && apt-get install -y \
+# Aggiorna e installa dipendenze di sistema
+RUN apt-get update && apt-get install -y --no-install-recommends \
     chromium \
     chromium-driver \
     fonts-liberation \
-    openssl \
-    && rm -rf /var/lib/apt/lists/*
+    libnss3 \
+    libxss1 \
+    libasound2 \
+    libatk-bridge2.0-0 \
+    libgtk-3-0 \
+    wget \
+    curl \
+    unzip \
+    libreoffice \
+ && rm -rf /var/lib/apt/lists/*
 
-# Imposta la working dir
+# Crea cartella app
 WORKDIR /app
 
-# Copia prima requirements.txt per sfruttare la cache
+# Copia requirements e installa dipendenze Python
 COPY requirements.txt .
-
-# Installa pacchetti Python
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copia il resto del progetto
+# Copia il resto del codice
 COPY . .
 
-# Espone la porta del servizio
-EXPOSE ${PORT}
+# Espone la porta
+EXPOSE 5000
 
-# Comando di avvio con Gunicorn (2 worker, 4 thread ciascuno → buono per IO-bound come Selenium)
-CMD ["gunicorn", "--workers=2", "--threads=4", "-b", "0.0.0.0:5000", "app:app"]
+# Comando di avvio (Gunicorn)
+CMD ["gunicorn", "-b", "0.0.0.0:5000", "app:app", "--workers=2", "--threads=4", "--timeout=120"]
