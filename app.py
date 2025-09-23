@@ -15,9 +15,6 @@ from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 
-# 📂 Integrazione Google Drive
-from drive_utils import get_drive_service, create_folder, upload_file
-
 # Cartella per i download
 DOWNLOAD_DIR = os.environ.get("DOWNLOAD_DIR", "/app/downloads")
 os.makedirs(DOWNLOAD_DIR, exist_ok=True)
@@ -169,23 +166,12 @@ def scrape_page(url: str):
 # ----------------------------
 
 def process_async(annunci, webhook_url, base_url, gemini_api_key=None):
-    drive_service = get_drive_service()  # inizializza Drive una volta sola
-
     for annuncio in annunci:
         url = annuncio.get("link ai documenti dell'annuncio")
         if not url:
             continue
 
         page_results = scrape_page(url)
-
-        # 📂 Crea cartella Drive per questo annuncio
-        titolo_annuncio = annuncio.get("titolo annuncio", "senza_titolo")
-        try:
-            drive_folder_id = create_folder(drive_service, titolo_annuncio)
-            print(f"[INFO] Cartella Drive creata: {drive_folder_id}", flush=True)
-        except Exception as e:
-            print(f"[ERRORE] Creazione cartella Drive fallita: {e}", flush=True)
-            drive_folder_id = None
 
         for r in page_results:
             saved = r.get("saved_file")
@@ -197,7 +183,6 @@ def process_async(annunci, webhook_url, base_url, gemini_api_key=None):
                 encoded_name = quote(saved)
                 r["file_url"] = f"{base_url}/files/{encoded_name}"
 
-                # 🔼 Upload Gemini
                 if gemini_api_key:
                     try:
                         file_obj = upload_to_gemini(file_path, saved, gemini_api_key)
@@ -205,19 +190,10 @@ def process_async(annunci, webhook_url, base_url, gemini_api_key=None):
                         r["gemini_name"] = file_obj.get("name")
                         r["gemini_mime"] = file_obj.get("mimeType")
                         r["gemini_state"] = file_obj.get("state")
-                        print(f"[INFO] Upload Gemini completato per {saved}", flush=True)
+                        print(f"[INFO] Upload Gemini completato per {saved} (uri: {r['gemini_uri']})", flush=True)
                     except Exception as e:
                         print(f"[ERRORE] Upload Gemini fallito per {saved}: {e}", flush=True)
                         r["gemini_upload"] = "failed"
-
-                # 🔼 Upload Google Drive
-                if drive_folder_id:
-                    try:
-                        drive_file_id = upload_file(drive_service, file_path, drive_folder_id)
-                        r["drive_file_id"] = drive_file_id
-                        print(f"[INFO] Upload Drive completato per {saved}", flush=True)
-                    except Exception as e:
-                        print(f"[ERRORE] Upload Drive fallito per {saved}: {e}", flush=True)
 
         payload = {
             "url": url,
@@ -229,8 +205,7 @@ def process_async(annunci, webhook_url, base_url, gemini_api_key=None):
                 "stato gara": annuncio.get("stato gara"),
             },
             "results": page_results,
-            "has_attachments": bool(page_results),
-            "drive_folder_id": drive_folder_id
+            "has_attachments": bool(page_results)
         }
 
         try:
@@ -240,11 +215,16 @@ def process_async(annunci, webhook_url, base_url, gemini_api_key=None):
             print(f"[ERRORE] Invio webhook fallito per {url}: {e}", flush=True)
 
 # ----------------------------
-# Filtro annunci
+# Filtro annunci (nuovo layer)
 # ----------------------------
 
 def filter_annunci(annunci):
-    print(f"[DEBUG] 🔍 Filtro annunci attivato. Numero annunci: {len(annunci)}", flush=True)
+    """
+    Filtra gli annunci in base al codice CPV principale (prime due cifre).
+    Visita la pagina /2, estrae il codice e confronta con CPV_WHITELIST.
+    """
+    print(f"[DEBUG] 🔍 Filtro annunci attivato. Numero annunci in ingresso: {len(annunci)}", flush=True)
+
     filtrati = []
     driver = build_driver()
 
@@ -259,6 +239,7 @@ def filter_annunci(annunci):
 
             try:
                 driver.get(filtro_url)
+
                 wait = WebDriverWait(driver, 20)
                 elem = wait.until(
                     EC.presence_of_element_located((
@@ -274,13 +255,14 @@ def filter_annunci(annunci):
                 first_two = cpv_code[:2]
 
                 if first_two in CPV_WHITELIST:
-                    print(f"[INFO] ✅ Annuncio mantenuto (CPV {cpv_code})", flush=True)
+                    print(f"[INFO] ✅ Annuncio mantenuto (CPV {cpv_code}, codice {first_two} in whitelist)", flush=True)
                     filtrati.append(annuncio)
                 else:
-                    print(f"[INFO] ❌ Annuncio scartato (CPV {cpv_code})", flush=True)
+                    print(f"[INFO] ❌ Annuncio scartato (CPV {cpv_code}, codice {first_two} non in whitelist)", flush=True)
 
             except Exception as e:
                 print(f"[ERRORE] Problema durante il filtraggio di {filtro_url}: {e}", flush=True)
+                # fallback: meglio scartare se non riusciamo a leggere il codice
                 continue
 
     finally:
@@ -288,14 +270,18 @@ def filter_annunci(annunci):
 
     return filtrati
 
+
 def filtro_e_processa(annunci, webhook_url, base_url, gemini_api_key=None):
+    """
+    Layer intermedio che prima filtra, poi chiama process_async.
+    """
     annunci_filtrati = filter_annunci(annunci)
     print(f"[INFO] Dopo filtro restano {len(annunci_filtrati)} annunci.", flush=True)
 
     if annunci_filtrati:
         process_async(annunci_filtrati, webhook_url, base_url, gemini_api_key)
     else:
-        print("[INFO] Nessun annuncio valido dopo il filtro.", flush=True)
+        print("[INFO] Nessun annuncio da processare dopo il filtro.", flush=True)
 
 # ----------------------------
 # Endpoint Flask
@@ -336,7 +322,7 @@ def delete_file():
     file_path = os.path.join(DOWNLOAD_DIR, filename)
 
     if not os.path.exists(file_path):
-        print(f"[ERRORE] delete_file: {filename} non trovato", flush=True)
+        print(f"[ERRORE] delete_file: {filename} non trovato in {DOWNLOAD_DIR}", flush=True)
         return jsonify({"status": "not_found", "file": filename}), 404
 
     try:
@@ -379,6 +365,7 @@ def ricevi_annunci():
     if not annunci:
         return jsonify({"error": "Nessun annuncio trovato nel payload"}), 400
 
+    # Costruzione URL documenti
     for a in annunci:
         id_annuncio = a.get("ID annuncio e anno")
         if id_annuncio:
@@ -386,14 +373,16 @@ def ricevi_annunci():
                 f"https://start.toscana.it/tendering/tenders/{id_annuncio.replace('/', '-')}/view/detail/1"
             )
 
-    print(f"[INFO] Estratti {len(annunci)} annunci.", flush=True)
+    print(f"[INFO] Estratti {len(annunci)} annunci da processare.", flush=True)
 
     base_url = request.host_url.rstrip("/")
     gemini_api_key = GEMINI_API_KEY
 
+    # ✅ Rispondo SUBITO a Zapier
     urls = [a.get("link ai documenti dell'annuncio") for a in annunci if a.get("link ai documenti dell'annuncio")]
     response = {"status": "in lavorazione", "urls": urls, "gemini_upload": bool(gemini_api_key)}
 
+    # Avvio in parallelo il layer filtro → process_async
     threading.Thread(
         target=filtro_e_processa,
         args=(annunci, WEBHOOK_DEST, base_url, gemini_api_key),
