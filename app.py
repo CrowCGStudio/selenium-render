@@ -87,6 +87,29 @@ def sbusta_p7m(file_path: str) -> str:
         print(f"[ERRORE] Sbustamento fallito per {file_path}: {e}", flush=True)
         return file_path
 
+def convert_odt_to_pdf(file_path: str) -> str:
+    """Converte un ODT in PDF usando LibreOffice headless. Ritorna il nuovo path."""
+    if not file_path.lower().endswith(".odt"):
+        return file_path
+
+    output_dir = os.path.dirname(file_path)
+    try:
+        subprocess.run(
+            ["libreoffice", "--headless", "--convert-to", "pdf", "--outdir", output_dir, file_path],
+            check=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE
+        )
+        pdf_path = file_path.rsplit(".", 1)[0] + ".pdf"
+        if os.path.exists(pdf_path):
+            os.remove(file_path)  # elimina l'ODT originale
+            print(f"[INFO] Convertito {file_path} → {pdf_path}", flush=True)
+            return pdf_path
+    except Exception as e:
+        print(f"[ERRORE] Conversione ODT fallita per {file_path}: {e}", flush=True)
+
+    return file_path
+
 def upload_to_gemini(file_path: str, filename: str, api_key: str) -> dict:
     mime_type = guess_mime(filename)
     url = GEMINI_UPLOAD_ENDPOINT + "?uploadType=multipart"
@@ -151,11 +174,9 @@ def scrape_page(url: str):
                         if not delta:
                             continue
 
-                        # se c'è un .crdownload sto ancora scaricando → continua ad attendere
                         if any(f.endswith(".crdownload") for f in delta):
                             continue
 
-                        # prendi il primo file "pronto"
                         ready = [f for f in delta if not f.endswith(".tmp")]
                         if ready:
                             new_file = ready[0]
@@ -199,6 +220,7 @@ def process_async(annunci, webhook_url, base_url, gemini_api_key=None):
             if saved:
                 file_path = os.path.join(DOWNLOAD_DIR, saved)
                 file_path = sbusta_p7m(file_path)
+                file_path = convert_odt_to_pdf(file_path)   # <-- nuovo step
                 saved = os.path.basename(file_path)
 
                 encoded_name = quote(saved)
@@ -236,14 +258,10 @@ def process_async(annunci, webhook_url, base_url, gemini_api_key=None):
             print(f"[ERRORE] Invio webhook fallito per {url}: {e}", flush=True)
 
 # ----------------------------
-# Filtro annunci (nuovo layer)
+# Filtro annunci
 # ----------------------------
 
 def filter_annunci(annunci):
-    """
-    Filtra gli annunci in base al codice CPV principale (prime due cifre).
-    Visita la pagina /2, estrae il codice e confronta con CPV_WHITELIST.
-    """
     print(f"[DEBUG] 🔍 Filtro annunci attivato. Numero annunci in ingresso: {len(annunci)}", flush=True)
 
     filtrati = []
@@ -283,7 +301,6 @@ def filter_annunci(annunci):
 
             except Exception as e:
                 print(f"[ERRORE] Problema durante il filtraggio di {filtro_url}: {e}", flush=True)
-                # fallback: meglio scartare se non riusciamo a leggere il codice
                 continue
 
     finally:
@@ -292,9 +309,6 @@ def filter_annunci(annunci):
     return filtrati
 
 def filtro_e_processa(annunci, webhook_url, base_url, gemini_api_key=None):
-    """
-    Layer intermedio che prima filtra, poi chiama process_async.
-    """
     annunci_filtrati = filter_annunci(annunci)
     print(f"[INFO] Dopo filtro restano {len(annunci_filtrati)} annunci.", flush=True)
 
@@ -385,7 +399,6 @@ def ricevi_annunci():
     if not annunci:
         return jsonify({"error": "Nessun annuncio trovato nel payload"}), 400
 
-    # Costruzione URL documenti
     for a in annunci:
         id_annuncio = a.get("ID annuncio e anno")
         if id_annuncio:
@@ -398,11 +411,9 @@ def ricevi_annunci():
     base_url = request.host_url.rstrip("/")
     gemini_api_key = GEMINI_API_KEY
 
-    # Risposta immediata a Zapier
     urls = [a.get("link ai documenti dell'annuncio") for a in annunci if a.get("link ai documenti dell'annuncio")]
     response = {"status": "in lavorazione", "urls": urls, "gemini_upload": bool(gemini_api_key)}
 
-    # Avvio in parallelo il layer filtro → process_async
     threading.Thread(
         target=filtro_e_processa,
         args=(annunci, WEBHOOK_DEST, base_url, gemini_api_key),
