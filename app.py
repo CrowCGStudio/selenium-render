@@ -26,7 +26,7 @@ GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 GEMINI_UPLOAD_ENDPOINT = "https://generativelanguage.googleapis.com/upload/v1beta/files"
 
 # Whitelist CPV (prime due cifre valide)
-CPV_WHITELIST = {"30","32","48","51","64","72","73","79","80","85","90","92","98"}
+CPV_WHITELIST = {"30","32","48","51","64","71","72","73","79","80","85","90","92","98"}
 
 app = Flask(__name__)
 
