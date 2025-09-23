@@ -19,14 +19,18 @@ from selenium.webdriver.support import expected_conditions as EC
 DOWNLOAD_DIR = os.environ.get("DOWNLOAD_DIR", "/app/downloads")
 os.makedirs(DOWNLOAD_DIR, exist_ok=True)
 
-# Webhook statico Zapier (destinazione finale)
-WEBHOOK_DEST = os.environ.get("WEBHOOK_DEST")
+# Webhook Zapier: ENV con fallback al valore del progetto originale
+WEBHOOK_DEST = os.environ.get(
+    "WEBHOOK_DEST",
+    "https://hooks.zapier.com/hooks/catch/24277770/umrp8cs/"
+)
+
 # Gemini API
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 GEMINI_UPLOAD_ENDPOINT = "https://generativelanguage.googleapis.com/upload/v1beta/files"
 
-# Whitelist CPV (prime due cifre valide)
-CPV_WHITELIST = {"30","32","48","51","64","71","72","73","79","80","85","90","92","98"}
+# Whitelist CPV (prime due cifre valide) - invariata
+CPV_WHITELIST = {"30","32","48","51","64","72","73","79","80","85","90","92","98"}
 
 app = Flask(__name__)
 
@@ -49,10 +53,14 @@ def build_driver():
     service = Service(chromedriver_path)
     driver = webdriver.Chrome(service=service, options=options)
 
-    driver.execute_cdp_cmd(
-        "Page.setDownloadBehavior",
-        {"behavior": "allow", "downloadPath": DOWNLOAD_DIR}
-    )
+    # Consenti i download automatici nella cartella
+    try:
+        driver.execute_cdp_cmd(
+            "Page.setDownloadBehavior",
+            {"behavior": "allow", "downloadPath": DOWNLOAD_DIR}
+        )
+    except Exception as e:
+        print(f"[WARN] setDownloadBehavior fallito: {e}", flush=True)
 
     return driver
 
@@ -127,24 +135,38 @@ def scrape_page(url: str):
 
                     before = set(os.listdir(DOWNLOAD_DIR))
 
-                    driver.execute_script("arguments[0].scrollIntoView(true);", link)
-                    time.sleep(0.5)
-                    driver.execute_script("arguments[0].click();", link)
+                    driver.execute_script("arguments[0].scrollIntoView({block:'center'});", link)
+                    time.sleep(0.3)
+                    try:
+                        link.click()  # click nativo (user gesture)
+                    except Exception:
+                        driver.execute_script("arguments[0].click();", link)  # fallback JS
 
                     new_file = None
-                    for _ in range(20):
+                    # Attendi fino a 30s (60×0.5s). Gestisci .crdownload
+                    for _ in range(60):
                         time.sleep(0.5)
                         after = set(os.listdir(DOWNLOAD_DIR))
-                        created = list(after - before)
-                        created = [f for f in created if not f.endswith(".crdownload") and not f.endswith(".tmp")]
-                        if created:
-                            new_file = created[0]
+                        delta = list(after - before)
+                        if not delta:
+                            continue
+
+                        # se c'è un .crdownload sto ancora scaricando → continua ad attendere
+                        if any(f.endswith(".crdownload") for f in delta):
+                            continue
+
+                        # prendi il primo file "pronto"
+                        ready = [f for f in delta if not f.endswith(".tmp")]
+                        if ready:
+                            new_file = ready[0]
                             print(f"[INFO] → File scaricato: {new_file}", flush=True)
                             break
 
                     result = {"index": index, "label": file_label, "href": href}
                     if new_file:
                         result["saved_file"] = new_file
+                    else:
+                        print(f"[WARN] Nessun file scaricato per allegato {index}: {file_label}", flush=True)
                     results.append(result)
 
                 except Exception as e:
@@ -269,7 +291,6 @@ def filter_annunci(annunci):
 
     return filtrati
 
-
 def filtro_e_processa(annunci, webhook_url, base_url, gemini_api_key=None):
     """
     Layer intermedio che prima filtra, poi chiama process_async.
@@ -377,7 +398,7 @@ def ricevi_annunci():
     base_url = request.host_url.rstrip("/")
     gemini_api_key = GEMINI_API_KEY
 
-    # ✅ Rispondo SUBITO a Zapier
+    # Risposta immediata a Zapier
     urls = [a.get("link ai documenti dell'annuncio") for a in annunci if a.get("link ai documenti dell'annuncio")]
     response = {"status": "in lavorazione", "urls": urls, "gemini_upload": bool(gemini_api_key)}
 
