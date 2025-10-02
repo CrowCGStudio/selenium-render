@@ -248,7 +248,8 @@ def process_async(annunci, webhook_url, base_url, gemini_api_key=None):
                 "stato gara": annuncio.get("stato gara"),
             },
             "results": page_results,
-            "has_attachments": bool(page_results)
+            # ✅ Modifica conservativa: true solo se almeno un risultato ha un file salvato
+            "has_attachments": any(r.get("saved_file") for r in page_results)
         }
 
         try:
