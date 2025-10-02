@@ -395,7 +395,12 @@ def ricevi_annunci():
     data = request.get_json(silent=True) or {}
     print("[INFO] Payload ricevuto:", data, flush=True)
 
-    annunci = data.get("task", {}).get("capturedLists", {}).get("Annunci START", [])
+    captured_lists = data.get("task", {}).get("capturedLists", {})
+    annunci = []
+    if captured_lists:
+        # prendi la prima lista disponibile, indipendentemente dal nome della chiave
+        annunci = next(iter(captured_lists.values()), [])
+
     if not annunci:
         return jsonify({"error": "Nessun annuncio trovato nel payload"}), 400
 
