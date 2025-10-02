@@ -5,8 +5,6 @@ import requests
 import mimetypes
 import json
 import subprocess
-import signal
-import psutil
 from urllib.parse import quote, unquote
 from flask import Flask, request, jsonify, send_from_directory
 
@@ -31,40 +29,16 @@ WEBHOOK_DEST = os.environ.get(
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 GEMINI_UPLOAD_ENDPOINT = "https://generativelanguage.googleapis.com/upload/v1beta/files"
 
-# Whitelist CPV (prime due cifre valide)
+# Whitelist CPV (prime due cifre valide) - invariata
 CPV_WHITELIST = {"30","32","48","51","64","71","72","73","79","80","85","90","92","98"}
 
 app = Flask(__name__)
-
-# ----------------------------
-# Logging risorse e segnali
-# ----------------------------
-
-def log_resources(tag=""):
-    """Logga l'uso attuale di memoria e CPU del processo."""
-    try:
-        proc = psutil.Process(os.getpid())
-        mem_info = proc.memory_info()
-        cpu_percent = proc.cpu_percent(interval=0.1)
-        print(f"[RESOURCES] {tag} PID={proc.pid}, "
-              f"RSS={mem_info.rss/1024/1024:.1f} MB, CPU%={cpu_percent}",
-              flush=True)
-    except Exception as e:
-        print(f"[WARN] Impossibile leggere risorse: {e}", flush=True)
-
-def handle_sigterm(signum, frame):
-    """Gestione SIGTERM per loggare risorse al momento dello shutdown."""
-    log_resources("SIGTERM ricevuto - stato finale")
-
-signal.signal(signal.SIGTERM, handle_sigterm)
 
 # ----------------------------
 # Funzioni di supporto
 # ----------------------------
 
 def build_driver():
-    log_resources("Prima di avviare Chrome")
-
     chrome_binary = os.environ.get("CHROME_BINARY", "/usr/bin/chromium")
     chromedriver_path = os.environ.get("CHROMEDRIVER_PATH", "/usr/bin/chromedriver")
 
@@ -79,6 +53,7 @@ def build_driver():
     service = Service(chromedriver_path)
     driver = webdriver.Chrome(service=service, options=options)
 
+    # Consenti i download automatici nella cartella
     try:
         driver.execute_cdp_cmd(
             "Page.setDownloadBehavior",
@@ -87,7 +62,6 @@ def build_driver():
     except Exception as e:
         print(f"[WARN] setDownloadBehavior fallito: {e}", flush=True)
 
-    log_resources("Dopo avvio Chrome")
     return driver
 
 def guess_mime(filename: str) -> str:
@@ -114,6 +88,7 @@ def sbusta_p7m(file_path: str) -> str:
         return file_path
 
 def convert_odt_to_pdf(file_path: str) -> str:
+    """Converte un ODT in PDF usando LibreOffice headless. Ritorna il nuovo path."""
     if not file_path.lower().endswith(".odt"):
         return file_path
 
@@ -127,7 +102,7 @@ def convert_odt_to_pdf(file_path: str) -> str:
         )
         pdf_path = file_path.rsplit(".", 1)[0] + ".pdf"
         if os.path.exists(pdf_path):
-            os.remove(file_path)
+            os.remove(file_path)  # elimina l'ODT originale
             print(f"[INFO] Convertito {file_path} → {pdf_path}", flush=True)
             return pdf_path
     except Exception as e:
@@ -186,19 +161,22 @@ def scrape_page(url: str):
                     driver.execute_script("arguments[0].scrollIntoView({block:'center'});", link)
                     time.sleep(0.3)
                     try:
-                        link.click()
+                        link.click()  # click nativo (user gesture)
                     except Exception:
-                        driver.execute_script("arguments[0].click();", link)
+                        driver.execute_script("arguments[0].click();", link)  # fallback JS
 
                     new_file = None
+                    # Attendi fino a 30s (60×0.5s). Gestisci .crdownload
                     for _ in range(60):
                         time.sleep(0.5)
                         after = set(os.listdir(DOWNLOAD_DIR))
                         delta = list(after - before)
                         if not delta:
                             continue
+
                         if any(f.endswith(".crdownload") for f in delta):
                             continue
+
                         ready = [f for f in delta if not f.endswith(".tmp")]
                         if ready:
                             new_file = ready[0]
@@ -231,8 +209,6 @@ def scrape_page(url: str):
 
 def process_async(annunci, webhook_url, base_url, gemini_api_key=None):
     for annuncio in annunci:
-        log_resources(f"Elaborazione annuncio {annuncio.get('ID annuncio e anno')}")
-
         url = annuncio.get("link ai documenti dell'annuncio")
         if not url:
             continue
@@ -244,7 +220,7 @@ def process_async(annunci, webhook_url, base_url, gemini_api_key=None):
             if saved:
                 file_path = os.path.join(DOWNLOAD_DIR, saved)
                 file_path = sbusta_p7m(file_path)
-                file_path = convert_odt_to_pdf(file_path)
+                file_path = convert_odt_to_pdf(file_path)   # <-- nuovo step
                 saved = os.path.basename(file_path)
 
                 encoded_name = quote(saved)
@@ -422,6 +398,7 @@ def ricevi_annunci():
     captured_lists = data.get("task", {}).get("capturedLists", {})
     annunci = []
     if captured_lists:
+        # prendi la prima lista disponibile, indipendentemente dal nome della chiave
         annunci = next(iter(captured_lists.values()), [])
 
     if not annunci:
@@ -456,5 +433,4 @@ def ricevi_annunci():
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
-    log_resources("Avvio applicazione")
     app.run(host="0.0.0.0", port=port)
