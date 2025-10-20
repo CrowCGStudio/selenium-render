@@ -331,24 +331,57 @@ def list_files():
         return jsonify({"error": str(e)}), 500
 
 
+# ──────────────────────────────────────────────
+# 🗑️ Endpoint per cancellare uno o più file
+# ──────────────────────────────────────────────
+
 @app.route("/delete_file", methods=["POST"])
 def delete_file():
-    data = request.get_json(silent=True) or {}
-    file_url = data.get("file_url")
-    if not file_url or "/files/" not in file_url:
-        return jsonify({"error": "file_url mancante o non valido"}), 400
-
-    filename = unquote(file_url.split("/files/")[-1])
-    path = os.path.join(DOWNLOAD_DIR, filename)
-    if not os.path.exists(path):
-        return jsonify({"status": "not_found", "file": filename}), 404
-
+    """
+    Elimina uno o più file dalla cartella di download.
+    Accetta:
+      - {"filename": "file.pdf"}                → singolo file
+      - {"filenames": ["file1.pdf","file2.pdf"]} → lista di file
+    Restituisce JSON con elenco dei file eliminati o mancanti.
+    """
     try:
-        os.remove(path)
-        print(f"[INFO] File eliminato: {filename}", flush=True)
-        return jsonify({"status": "deleted", "file": filename}), 200
+        data = request.get_json(force=True, silent=True) or {}
+
+        # normalizza in lista
+        filenames = data.get("filenames")
+        if not filenames:
+            single = data.get("filename")
+            if single:
+                filenames = [single]
+            else:
+                return jsonify({"error": "nessun filename o filenames fornito"}), 400
+
+        deleted, not_found = [], []
+
+        for name in filenames:
+            # sanitizzazione minima per evitare path traversal
+            safe_name = os.path.basename(name)
+            path = os.path.join(DOWNLOAD_DIR, safe_name)
+            if os.path.exists(path):
+                try:
+                    os.remove(path)
+                    deleted.append(safe_name)
+                    print(f"[INFO] 🗑️ File eliminato: {safe_name}", flush=True)
+                except Exception as e:
+                    print(f"[ERRORE] durante eliminazione di {safe_name}: {e}", flush=True)
+            else:
+                not_found.append(safe_name)
+
+        return jsonify({
+            "status": "ok",
+            "deleted": deleted,
+            "not_found": not_found
+        }), 200
+
     except Exception as e:
-        return jsonify({"status": "error", "file": filename, "error": str(e)}), 500
+        print(f"[ERRORE] delete_file: {e}", flush=True)
+        return jsonify({"status": "error", "message": str(e)}), 500
+
 
 
 # =========================
