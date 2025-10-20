@@ -428,57 +428,6 @@ def ricevi_annunci():
 
     return jsonify(response), 202
 
-@app.route("/upload_report", methods=["POST"])
-def upload_report():
-    """
-    Riceve un file HTML da n8n e lo salva in /downloads,
-    rendendolo accessibile come pagina web.
-    """
-    content_type = request.headers.get("Content-Type", "")
-    file_path = os.path.join(DOWNLOAD_DIR, "report.html")
-
-    # 1️⃣ Se n8n invia il file come multipart/form-data
-    if "multipart/form-data" in content_type:
-        file = request.files.get("file")
-        if not file:
-            return jsonify({"error": "Nessun file caricato"}), 400
-        html_content = file.read().decode("utf-8")
-
-    # 2️⃣ Se n8n invia l'HTML come raw text (application/html o text/html)
-    elif "text/html" in content_type or "application/html" in content_type:
-        html_content = request.data.decode("utf-8")
-
-    # 3️⃣ Se n8n invia via JSON
-    elif "application/json" in content_type:
-        data = request.get_json(silent=True) or {}
-        html_content = data.get("html") or data.get("content") or ""
-    else:
-        return jsonify({"error": f"Content-Type non supportato: {content_type}"}), 400
-
-    if not html_content.strip():
-        return jsonify({"error": "Contenuto HTML vuoto"}), 400
-
-    if "<html" not in html_content.lower():
-        return jsonify({"error": "Il file non sembra HTML valido"}), 400
-
-    # Salva il file (sovrascrive quello precedente)
-    with open(file_path, "w", encoding="utf-8") as f:
-        f.write(html_content)
-
-    # Costruisci URL pubblico
-    base_url = request.host_url.rstrip("/")
-    file_url = f"{base_url}/files/report.html"
-
-    print(f"[INFO] Report HTML salvato: {file_url}", flush=True)
-
-    return jsonify({
-        "status": "ok",
-        "message": "Report HTML aggiornato correttamente.",
-        "file_url": file_url
-    }), 200
-
-
-
 # ----------------------------
 # Main
 # ----------------------------
