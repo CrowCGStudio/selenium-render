@@ -22,11 +22,12 @@ from selenium.webdriver.support import expected_conditions as EC
 DOWNLOAD_DIR = os.environ.get("DOWNLOAD_DIR", "/app/downloads")
 os.makedirs(DOWNLOAD_DIR, exist_ok=True)
 
-WEBHOOK_DEST = os.environ.get("WEBHOOK_DEST")  # <-- workflow n8n di destinazione
+WEBHOOK_DEST = os.environ.get("WEBHOOK_DEST")  # <-- workflow n8n di destinazione (OBBLIGATORIO per invio risultati)
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")  # opzionale: se assente, salta upload a Gemini
 GEMINI_UPLOAD_ENDPOINT = "https://generativelanguage.googleapis.com/upload/v1beta/files"
 
 app = Flask(__name__)
+
 
 # =========================
 # Helpers
@@ -46,6 +47,7 @@ def build_driver():
     service = Service(chromedriver_path)
     driver = webdriver.Chrome(service=service, options=options)
 
+    # abilita download automatici
     try:
         driver.execute_cdp_cmd(
             "Page.setDownloadBehavior",
@@ -151,12 +153,13 @@ def scrape_attachments(url: str):
                     driver.execute_script("arguments[0].click();", link)
 
                 new_file = None
-                for _ in range(60):
+                for _ in range(60):  # fino a ~30s
                     time.sleep(0.5)
                     after = set(os.listdir(DOWNLOAD_DIR))
                     delta = list(after - before)
                     if not delta:
                         continue
+                    # ignora .crdownload / .tmp
                     ready = [f for f in delta if not (f.endswith(".crdownload") or f.endswith(".tmp"))]
                     if ready:
                         new_file = ready[0]
@@ -181,19 +184,13 @@ def scrape_attachments(url: str):
 
 
 def process_single_announcement(annuncio: dict, base_url: str):
-    """Flusso completo: costruisce URL da ID, scarica allegati, sbusta/converti, upload a Gemini, POST a n8n."""
-    id_annuncio = annuncio.get("ID annuncio e anno")
-    if not id_annuncio:
-        print("[ERRORE] Annuncio senza ID annuncio e anno, impossibile generare URL.", flush=True)
+    """Flusso completo: scarica allegati, sbusta/converti, upload a Gemini, POST a n8n."""
+    url = annuncio.get("link ai documenti dell'annuncio")
+    if not url:
+        print("[ERRORE] Annuncio senza link ai documenti, stop.", flush=True)
         return
 
-    # 🔗 Ricostruisce sempre il link ignorando quello nel payload
-    url = f"https://start.toscana.it/tendering/tenders/{id_annuncio.replace('/', '-')}/view/detail/1"
-    annuncio["link ai documenti dell'annuncio"] = url
-
     print(f"[INFO] 🔍 Analisi annuncio: {annuncio.get('titolo annuncio','(senza titolo)')}", flush=True)
-    print(f"[INFO] 🔗 URL ricostruito: {url}", flush=True)
-
     page_results = scrape_attachments(url)
 
     out = []
@@ -237,6 +234,7 @@ def process_single_announcement(annuncio: dict, base_url: str):
         "source": "analizza_annuncio",
     }
 
+    # POST a n8n (fine processo)
     if WEBHOOK_DEST:
         try:
             requests.post(WEBHOOK_DEST, json=payload, timeout=30)
@@ -245,6 +243,7 @@ def process_single_announcement(annuncio: dict, base_url: str):
             print(f"[ERRORE] Invio a WEBHOOK_DEST fallito: {e}", flush=True)
     else:
         print("[WARN] WEBHOOK_DEST non impostata: risultati non inviati.", flush=True)
+
 
 # =========================
 # Endpoints
@@ -256,16 +255,25 @@ def health():
 
 @app.route("/upload_report", methods=["POST"])
 def upload_report():
+    """
+    Riceve un file HTML da n8n e lo salva in /downloads,
+    rendendolo accessibile come pagina web reale (/files/report.html).
+    """
     content_type = request.headers.get("Content-Type", "")
     file_path = os.path.join(DOWNLOAD_DIR, "report.html")
 
+    # 1) multipart/form-data (field name: file)
     if "multipart/form-data" in content_type:
         f = request.files.get("file")
         if not f:
             return jsonify({"error": "Nessun file caricato"}), 400
         html_content = f.read().decode("utf-8")
+
+    # 2) raw text/html
     elif "text/html" in content_type or "application/html" in content_type:
         html_content = request.data.decode("utf-8")
+
+    # 3) JSON { html: "<!DOCTYPE html>..." }
     elif "application/json" in content_type:
         data = request.get_json(silent=True) or {}
         html_content = data.get("html") or data.get("content") or ""
@@ -274,6 +282,8 @@ def upload_report():
 
     if not html_content.strip():
         return jsonify({"error": "Contenuto HTML vuoto"}), 400
+    if "<html" not in html_content.lower():
+        return jsonify({"error": "Il contenuto non sembra HTML valido"}), 400
 
     with open(file_path, "w", encoding="utf-8") as f:
         f.write(html_content)
@@ -285,6 +295,10 @@ def upload_report():
 
 @app.route("/analizza_annuncio", methods=["POST"])
 def analizza_annuncio():
+    """
+    Riceve un SINGOLO annuncio, avvia l'analisi in background
+    e (al termine) invia i risultati a WEBHOOK_DEST (n8n).
+    """
     data = request.get_json(silent=True) or {}
     annuncio = data.get("announcement")
     if not annuncio:
@@ -298,11 +312,13 @@ def analizza_annuncio():
         daemon=True
     ).start()
 
+    # Al browser basta sapere che è partito
     return jsonify({"status": "in lavorazione", "queued": True}), 202
 
 
 @app.route("/files/<path:filename>", methods=["GET"])
 def serve_file(filename):
+    # serve inline (gli .html si aprono nel browser)
     return send_from_directory(DOWNLOAD_DIR, filename)
 
 
@@ -315,10 +331,23 @@ def list_files():
         return jsonify({"error": str(e)}), 500
 
 
+# ──────────────────────────────────────────────
+# 🗑️ Endpoint per cancellare uno o più file
+# ──────────────────────────────────────────────
+
 @app.route("/delete_file", methods=["POST"])
 def delete_file():
+    """
+    Elimina uno o più file dalla cartella di download.
+    Accetta:
+      - {"filename": "file.pdf"}                → singolo file
+      - {"filenames": ["file1.pdf","file2.pdf"]} → lista di file
+    Restituisce JSON con elenco dei file eliminati o mancanti.
+    """
     try:
         data = request.get_json(force=True, silent=True) or {}
+
+        # normalizza in lista
         filenames = data.get("filenames")
         if not filenames:
             single = data.get("filename")
@@ -330,6 +359,7 @@ def delete_file():
         deleted, not_found = [], []
 
         for name in filenames:
+            # sanitizzazione minima per evitare path traversal
             safe_name = os.path.basename(name)
             path = os.path.join(DOWNLOAD_DIR, safe_name)
             if os.path.exists(path):
@@ -351,6 +381,7 @@ def delete_file():
     except Exception as e:
         print(f"[ERRORE] delete_file: {e}", flush=True)
         return jsonify({"status": "error", "message": str(e)}), 500
+
 
 
 # =========================
